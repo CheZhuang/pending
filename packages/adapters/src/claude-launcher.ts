@@ -20,7 +20,7 @@ export interface ManagedClaudeEvent {
 export interface ManagedClaudeGateway {
   registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession>;
   stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent>;
-  endSession(sessionId: string): Promise<void>;
+  endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void>;
 }
 
 /** REST bridge for the session/stream routes described by the shared gateway plan. */
@@ -93,10 +93,14 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     }
   }
 
-  async endSession(sessionId: string): Promise<void> {
+  async endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void> {
     const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/end`, this.baseUrl), {
       method: 'POST',
-      headers: this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {},
+      headers: {
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
+        ...(exit ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(exit ? { body: JSON.stringify(exit) } : {}),
       signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) throw new Error(`Gateway session end failed with HTTP ${response.status}`);
@@ -122,6 +126,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
   const streamAbort = new AbortController();
   let settingsDir: string | undefined;
   let child: ChildProcess | undefined;
+  let childExit: { exitCode: number | null; signal: string | null } | undefined;
   let streamTask: Promise<void> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
@@ -155,7 +160,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
 
     streamTask = (async () => {
       for await (const event of gateway.stream(session.afterSeq, streamAbort.signal)) {
-        if (event.type === 'session.killed' && event.sessionId === session.sessionId) killChild();
+        if ((event.type === 'session.kill-requested' || event.type === 'session.killed') && event.sessionId === session.sessionId) killChild();
       }
       if (!streamAbort.signal.aborted) throw new Error('Gateway event stream closed unexpectedly');
     })().catch(error => {
@@ -169,24 +174,33 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     onSigterm = () => managedChild.kill('SIGTERM');
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
-    return await waitForExit(child);
+    return await waitForExit(child, exit => { childExit = exit; });
   } finally {
     streamAbort.abort();
     if (onSigint) process.off('SIGINT', onSigint);
     if (onSigterm) process.off('SIGTERM', onSigterm);
     if (killTimer) clearTimeout(killTimer);
     await streamTask;
-    await gateway.endSession(session.sessionId).catch(error => {
+    // Only report an end after observing the child exit. A spawn error is not
+    // evidence that the managed process exited, so leave that session for recovery.
+    if (childExit) await gateway.endSession(session.sessionId, childExit).catch(error => {
       process.stderr.write(`[Harness] Could not report session end: ${error instanceof Error ? error.message : String(error)}\n`);
     });
     if (settingsDir) await rm(settingsDir, { recursive: true, force: true });
   }
 }
 
-function waitForExit(child: ChildProcess): Promise<number> {
+function waitForExit(
+  child: ChildProcess,
+  onExit: (exit: { exitCode: number | null; signal: string | null }) => void,
+): Promise<number> {
   return new Promise((resolveExit, reject) => {
     child.once('error', reject);
-    child.once('exit', (code, signal) => resolveExit(code ?? (signal === 'SIGINT' ? 130 : 1)));
+    child.once('exit', (code, signal) => {
+      const exit = { exitCode: code, signal: signal === null ? null : String(signal) };
+      onExit(exit);
+      resolveExit(code ?? (signal === 'SIGINT' ? 130 : 1));
+    });
   });
 }
 
