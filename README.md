@@ -4,6 +4,10 @@
 
 Use Node.js 24+: `npm ci && npm run build && npm start`. The daemon listens on `127.0.0.1:8787`. See [Gateway API and integration instructions](docs/GATEWAY_API.md), [request fixtures](fixtures/gateway.http), and [typed wire contracts](packages/contracts/src/gateway.ts).
 
+## Validation
+
+Run `npm run typecheck`, `npm test`, and `npm run build` with Node.js 24+. Typechecking includes test files; the production build excludes them. GitHub Actions runs these checks on every push and pull request using `npm ci` and the committed lockfile.
+
 ## Project Overview
 
 Agentree is a local-first, secure collaboration gateway for independent AI agents.
