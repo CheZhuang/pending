@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { CodexEventJournal } from './codex-journal.js';
 import { createInterface } from 'node:readline';
 import type { NormalizedEvent } from '../../contracts/src/index.js';
 import type {
@@ -18,6 +20,8 @@ interface PendingRequest { resolve(value: unknown): void; reject(error: Error): 
 
 export interface CodexAppServerOptions {
   cwd?: string;
+  journalPath?: string;
+  onServerRequest?: (request: { method: string; params?: unknown }) => Promise<unknown>;
   command?: string;
   args?: string[];
   /** The official clientInfo object sent during initialize. */
@@ -35,7 +39,7 @@ class StdioJsonRpc {
   private readonly lines: ReturnType<typeof createInterface>;
   private closed = false;
 
-  constructor(private readonly child: ChildProcessWithoutNullStreams) {
+  constructor(private readonly child: ChildProcessWithoutNullStreams, private readonly onServerRequest?: CodexAppServerOptions['onServerRequest']) {
     this.lines = createInterface({ input: child.stdout });
     this.lines.on('line', line => this.onLine(line));
     child.on('error', error => this.fail(error));
@@ -94,7 +98,12 @@ class StdioJsonRpc {
       // Ignore non-JSON stdout lines; only protocol messages become events.
       return;
     }
-    if (typeof message.id === 'number') {
+    if (typeof message.method === 'string' && (typeof message.id === 'number' || typeof message.id === 'string')) {
+      // Server requests have their own ID namespace; never resolve our requests with them.
+      void this.answerServerRequest(message);
+      return;
+    }
+    if (typeof message.id === 'number' && ('result' in message || 'error' in message)) {
       const response = message as unknown as RpcResponse;
       const pending = this.pending.get(response.id);
       if (!pending) return;
@@ -106,7 +115,25 @@ class StdioJsonRpc {
     }
     if (typeof message.method === 'string') {
       const notification = { method: message.method, params: message.params };
-      for (const listener of this.listeners) listener(notification);
+      try { for (const listener of this.listeners) listener(notification); }
+      catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
+    }
+  }
+
+  private async answerServerRequest(message: JsonObject): Promise<void> {
+    const method = message.method as string;
+    try {
+      let result: unknown;
+      if (this.onServerRequest) result = await this.onServerRequest({ method, params: message.params });
+      else if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') result = { decision: 'decline' };
+      else if (method === 'item/permissions/requestApproval') result = { permissions: {}, scope: 'turn' };
+      else {
+        this.write({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Unsupported server request: ${method}` } });
+        return;
+      }
+      if (!this.closed) this.write({ jsonrpc: '2.0', id: message.id, result });
+    } catch {
+      if (!this.closed) this.write({ jsonrpc: '2.0', id: message.id, error: { code: -32603, message: 'Server request handler failed' } });
     }
   }
 
@@ -129,7 +156,8 @@ class StdioJsonRpc {
 export class CodexAppServerAdapter implements AgentAdapter {
   readonly runtime = 'codex-app-server';
   private sequence = 0;
-  private readonly history: NativeRecord[] = [];
+  private readonly journal: CodexEventJournal;
+  private readonly history: Array<NativeRecord & { sequence: number }>;
   private readonly capabilitiesValue: AdapterCapabilities = {
     passiveObservation: true,
     managedSession: true,
@@ -138,6 +166,10 @@ export class CodexAppServerAdapter implements AgentAdapter {
   };
 
   private constructor(private rpc: StdioJsonRpc, readonly nativeId: string, private readonly options: CodexAppServerOptions) {
+    this.journal = new CodexEventJournal(nativeId, options.journalPath);
+    const recovered = this.journal.load();
+    this.sequence = Math.max(recovered.sequence, CodexAppServerAdapter.cursorSequence(options.initialCursor));
+    this.history = recovered.records.map(record => ({ ...record, payload: record.payload }));
     rpc.onNotification(notification => this.capture(notification));
   }
 
@@ -167,7 +199,6 @@ export class CodexAppServerAdapter implements AgentAdapter {
     try {
       await CodexAppServerAdapter.initialize(rpc, options);
       const adapter = new CodexAppServerAdapter(rpc, nativeId, options);
-      adapter.sequence = CodexAppServerAdapter.cursorSequence(options.initialCursor);
       await rpc.request('thread/resume', { threadId: nativeId });
       return adapter;
     } catch (error) {
@@ -194,9 +225,9 @@ export class CodexAppServerAdapter implements AgentAdapter {
     this.assertSession(session);
     const offset = cursor ? Number(cursor.value) : 0;
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.sequence) throw new Error('Invalid Codex event cursor');
-    const records = this.history.filter(record => Number(record.nativeId.split(':').at(-1)) > offset);
+    const records = this.history.filter(record => record.sequence > offset);
     const page = records.slice(0, 100);
-    const last = page.length ? Number(page.at(-1)!.nativeId.split(':').at(-1)) : offset;
+    const last = page.length ? page.at(-1)!.sequence : offset;
     return { records: page, nextCursor: { value: String(last) }, hasMore: records.length > page.length };
   }
 
@@ -205,6 +236,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > this.sequence) throw new Error('Invalid Codex event acknowledgement');
     let removeCount = 0;
     while (removeCount < this.history.length && this.sequenceFor(this.history[removeCount]!) <= sequence) removeCount += 1;
+    this.journal.save(this.sequence, this.history.slice(removeCount));
     this.history.splice(0, removeCount);
   }
 
@@ -246,16 +278,20 @@ export class CodexAppServerAdapter implements AgentAdapter {
     const params = notification.params;
     const row = params && typeof params === 'object' && !Array.isArray(params) ? params as JsonObject : { value: params };
     const timestamp = typeof row.timestamp === 'string' ? row.timestamp : new Date().toISOString();
-    this.history.push({
-      nativeId: `codex:${this.nativeId}:event:${this.sequence}`,
+    const record = {
+      sequence: this.sequence,
+      nativeId: `codex:${this.nativeId}:event:${randomUUID()}`,
       type: notification.method,
       occurredAt: timestamp,
       payload: { method: notification.method, params },
-    });
+    };
+    // Journal before exposing the observation so a failed cursor save can replay it.
+    this.journal.save(this.sequence, [...this.history, record]);
+    this.history.push(record);
   }
 
-  private sequenceFor(record: NativeRecord): number {
-    return Number(record.nativeId.split(':').at(-1));
+  private sequenceFor(record: NativeRecord & { sequence: number }): number {
+    return record.sequence;
   }
 
   private assertSession(session: NativeSession): void {
@@ -270,7 +306,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     });
     // The protocol uses stdout only. Drain stderr to avoid child-process backpressure.
     child.stderr.resume();
-    return new StdioJsonRpc(child);
+    return new StdioJsonRpc(child, options.onServerRequest);
   }
 
   private static async initialize(rpc: StdioJsonRpc, options: CodexAppServerOptions): Promise<void> {

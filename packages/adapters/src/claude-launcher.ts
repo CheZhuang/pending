@@ -114,7 +114,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     settingsDir = await mkdtemp(join(tmpdir(), 'agentree-claude-'));
     const settingsPath = join(settingsDir, 'settings.json');
     const hookScriptPath = options.hookScriptPath ?? defaultHookScriptPath();
-    const tsxLoader = hookScriptPath.endsWith('.ts') ? ' --import tsx' : '';
+    const tsxLoader = hookScriptPath.endsWith('.ts') ? ` --import ${shellQuote(import.meta.resolve('tsx'))}` : '';
     const hookCommand = `${shellQuote(process.execPath)}${tsxLoader} ${shellQuote(hookScriptPath)}`;
     await writeFile(settingsPath, JSON.stringify(createClaudeHookSettings(hookCommand)), { mode: 0o600 });
 

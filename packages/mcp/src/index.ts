@@ -61,9 +61,12 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     inputSchema: { afterRevision: z.number().int().min(0).optional() },
     outputSchema: contextOutputSchema,
   }, tool(({ afterRevision }: { afterRevision?: number }) => {
-    const commits = service.context(session.branchId).filter(commit => commit.revision > (afterRevision ?? 0));
-    const branch = service.branches(session.workspaceId).find(item => item.id === session.branchId);
-    return { branchId: session.branchId, currentRevision: branch?.revision ?? 0, commits };
+    // Core returns immutable history ordered by target-branch attachment revision.
+    // A merged commit's own revision belongs to its original branch.
+    const history = service.context(session.branchId);
+    const offset = afterRevision ?? 0;
+    if (offset > history.length) throw new DomainError('STALE', 'Cursor is ahead of branch history');
+    return { branchId: session.branchId, currentRevision: history.length, commits: history.slice(offset) };
   }));
 
   server.registerTool('context_get', {
