@@ -67,6 +67,21 @@ export function eventSummary(e: SequencedEvent): string {
       return `branch ${str(p.name)} (${short(str(p.id))})`;
     case 'workspace.created':
       return `workspace ${str(p.name)} (${short(str(p.id))})`;
+    // Gateway tool-approval and session lifecycle records (src/gateway.ts).
+    case 'tool.pending': {
+      const input = rec(p.input);
+      return `${str(p.tool)} ${clip(str(input.command) || str(input.file_path) || str(input.path) || JSON.stringify(p.input ?? null), 60)} · waiting for a human`;
+    }
+    case 'tool.decided':
+      return `approval ${short(str(p.approvalId))} → ${str(p.state)}${p.reason && p.reason !== p.state ? ` (${clip(str(p.reason), 50)})` : ''} by ${str(p.actor) || '?'}`;
+    case 'tool.execution-decision':
+      return `hook told ${str(p.outcome).toUpperCase()} for approval ${short(str(p.approvalId))}`;
+    case 'session.kill-requested':
+      return 'stop requested by a human';
+    case 'session.ended':
+      return 'session ended';
+    case 'session.exited':
+      return `process exited${p.exitCode !== undefined && p.exitCode !== null ? ` with code ${String(p.exitCode)}` : ''}${p.signal ? ` by ${str(p.signal)}` : ''}`;
     default: {
       // Claude hooks use tool_name/tool_input; B's adapter records use tool/input.
       const tool = str(p.tool_name) || str(p.tool);
