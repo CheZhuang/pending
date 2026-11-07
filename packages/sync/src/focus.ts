@@ -98,7 +98,7 @@ function rawPaths(event: NormalizedEvent): { cwd?: string; paths: Raw[] } {
 /** Root-relative file touches for one event; paths outside the workspace are dropped. */
 export function extractTouches(event: NormalizedEvent, roots: WorkspaceRoot[]): Touch[] {
   const { cwd, paths } = rawPaths(event);
-  const touches: Touch[] = [];
+  const touches = new Map<string, Touch>();
   for (const raw of paths) {
     // An adapter-supplied rootId narrows resolution to that root; unknown roots are dropped.
     const candidates = raw.rootId ? roots.filter((r) => r.id === raw.rootId) : roots;
@@ -106,9 +106,13 @@ export function extractTouches(event: NormalizedEvent, roots: WorkspaceRoot[]): 
     const rooted = toRootedPath(raw.path, candidates, cwd);
     if (!rooted) continue;
     const access = raw.access ?? (WRITE_TYPE.test(event.type) ? 'write' : 'read');
-    touches.push({ ...rooted, access });
+    // Adapters may retain native changes alongside normalized touches.
+    const id = key(rooted.rootId, rooted.path);
+    const existing = touches.get(id);
+    if (!existing) touches.set(id, { ...rooted, access });
+    else if (access === 'write') existing.access = 'write';
   }
-  return touches;
+  return [...touches.values()];
 }
 
 const key = (rootId: string | undefined, path: string) => `${rootId ?? ''}\u0000${path}`;
