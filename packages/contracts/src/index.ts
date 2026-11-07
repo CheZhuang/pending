@@ -10,6 +10,7 @@ export interface Workspace {
     id: string;
     name: string;
     roots: WorkspaceRoot[];
+    mainBranchId: string;
 }
 export interface WorkspaceRoot {
     id: string;
@@ -34,9 +35,9 @@ export interface Session {
     nativeId: string;
     runtime: string;
 }
-export const scopeSchema = z.discriminatedUnion('type', [z.object({ type: z.literal('workspace') }), z.object({ type: z.literal('folder'), path: z.string().min(1) }), z.object({ type: z.literal('file'), path: z.string().min(1) }), z.object({ type: z.literal('task'), taskId: z.string().min(1) })]);
+export const scopeSchema = z.discriminatedUnion('type', [z.object({ type: z.literal('workspace') }), z.object({ type: z.literal('folder'), path: z.string().min(1), rootId: z.string().min(1).optional() }), z.object({ type: z.literal('file'), path: z.string().min(1), rootId: z.string().min(1).optional() }), z.object({ type: z.literal('task'), taskId: z.string().min(1) })]);
 export type Scope = z.infer<typeof scopeSchema>;
-export const knowledgeSchema = z.object({ kind: z.enum(['finding', 'decision']), key: z.string().min(1), body: z.string().min(1), scope: scopeSchema });
+export const knowledgeSchema = z.object({ kind: z.enum(['finding', 'decision']), key: z.string().min(1), body: z.string().min(1), scope: scopeSchema, impactScope: scopeSchema.optional() });
 export type Knowledge = z.infer<typeof knowledgeSchema>;
 export interface ContextCommit {
     id: string;
@@ -57,6 +58,7 @@ export interface MergeRequest {
     targetBranchId: string;
     commitIds: string[];
     expectedRevision: number;
+    expectedMainRevision: number;
     state: 'pending' | 'applied' | 'rejected';
     reviewId?: string;
 }
@@ -72,6 +74,7 @@ export interface Review {
     conflicts: Conflict[];
     decidedBy?: string;
     decision?: 'approved' | 'rejected';
+    resolutions?: ConflictResolution[];
 }
 export type Operation = 'workspace.create' | 'branch.create' | 'session.register' | 'event.ingest' | 'context.publish' | 'context.read' | 'merge.create' | 'merge.apply' | 'review.resolve' | 'review.read' | 'controlled.execute';
 export interface PolicyDecision {
@@ -95,4 +98,44 @@ export interface NormalizedEvent {
 }
 export class DomainError extends Error {
     constructor(public code: string, message: string) { super(message); }
+}
+
+/** Revisions count attachments, not commits authored on another branch. */
+export interface ContextRevision {
+    branchRevision: number;
+    mainRevision: number;
+}
+export interface ContextEntry {
+    commit: ContextCommit;
+    branchId: string;
+    revision: number;
+}
+export interface ContextSnapshot {
+    branchId: string;
+    revision: ContextRevision;
+    entries: ContextEntry[];
+    history: ContextCommit[];
+    knowledge: ContextCommit[];
+}
+export interface ConflictResolution {
+    existingCommitId: string;
+    incomingCommitId: string;
+    selectedCommitId: string;
+}
+export interface EventQuery {
+    afterSequence?: number;
+    throughSequence?: number;
+    limit?: number;
+    sessionId?: string;
+    source?: string;
+    type?: string;
+}
+export interface SequencedEvent extends NormalizedEvent {
+    sequence: number;
+}
+export interface EventPage {
+    events: SequencedEvent[];
+    nextSequence: number;
+    throughSequence: number;
+    hasMore: boolean;
 }
