@@ -233,3 +233,21 @@ test('explicit subscriptions extend or override inferred focus and trigger a res
     assert.equal(overridden.stats.filtered, 2, 'both api findings are unrelated under the override');
   } finally { f.cleanup(); }
 });
+
+test('the author of an overruled decision learns it even if it never synced before', () => {
+  const f = fixture();
+  try {
+    const d1 = f.aliceAgent.publish(f.aliceBranch.id, decision('token-ttl', 'TTL is 15 minutes', { type: 'folder', path: 'src/auth' }, { type: 'folder', path: 'src/api' }));
+    f.mergeToMain(f.aliceBranch.id, [d1.id]);
+    const d2 = f.bobAgent.publish(f.bobBranch.id, decision('token-ttl', 'TTL is 60 minutes', { type: 'folder', path: 'src/api' }));
+    f.mergeToMain(f.bobBranch.id, [d2.id], (reviewId) => {
+      const review = f.human.review(reviewId);
+      f.human.resolveReview(reviewId, 'approved', [{ ...review.conflicts[0], selectedCommitId: d2.id }]);
+    });
+    // Alice works in src/auth and never synced; Bob's decision lives in src/api.
+    const delta = f.syncFor(f.aliceAgent).sync({ session: f.alice });
+    assert.deepEqual(keys(delta), ['superseded-decision:token-ttl', 'accepted-decision:token-ttl']);
+    assert.deepEqual(delta.items.map((i) => i.commitId), [d1.id, d2.id]);
+    assert.equal(delta.items[1].relevance.match, 'follow-up');
+  } finally { f.cleanup(); }
+});

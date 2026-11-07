@@ -1,0 +1,13 @@
+{
+  "name": "@agentree/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "agentree": "./src/main.ts" },
+  "dependencies": {
+    "@agentree/contracts": "workspace:*",
+    "@agentree/core": "workspace:*",
+    "@agentree/storage": "workspace:*",
+    "@agentree/sync": "workspace:*"
+  }
+}
