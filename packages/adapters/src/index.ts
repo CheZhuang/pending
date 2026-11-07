@@ -139,3 +139,6 @@ export { CodexAppServerAdapter, type CodexAppServerOptions } from './codex-app-s
 export { handleClaudePreToolHook, createClaudeDecideClient, type ClaudeDecideRequest, type ClaudeHookEnvironment } from './claude-pre-tool-hook.js';
 export { createClaudeHookSettings, type ClaudeSettings } from './claude-settings.js';
 export { HttpManagedClaudeGateway, runManagedClaude, type ClaudeLaunchOptions, type ManagedClaudeGateway, type ManagedClaudeEvent, type ManagedClaudeSession } from './claude-launcher.js';
+export { NativeGatewayClient, type NativeConnection } from './gateway-client.js';
+export { ManagedCodex, gatewayCodexApproval, type ManagedCodexOptions } from './codex-managed.js';
+export { observeClaudeHook } from './claude-observer.js';

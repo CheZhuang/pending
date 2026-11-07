@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { nativeMcpConfig } from './native-config.js';
+import { homedir } from 'node:os';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -18,7 +21,7 @@ export interface ManagedClaudeEvent {
 }
 
 export interface ManagedClaudeGateway {
-  registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession>;
+  registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession>;
   stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent>;
   endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void>;
 }
@@ -32,7 +35,7 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     private readonly adminToken = process.env.HARNESS_ADMIN_TOKEN,
   ) {}
 
-  async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession> {
+  async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
       method: 'POST', headers: {
         'content-type': 'application/json',
@@ -43,6 +46,7 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number; sessionToken?: string };
     const sessionId = data.sessionId ?? data.id;
     if (!sessionId) throw new Error('Gateway session registration returned no session id');
+    if(!data.sessionToken) throw new Error('Gateway returned no session credential');
     this.sessionToken = data.sessionToken;
     return { sessionId, afterSeq: data.seq ?? data.currentSeq ?? 0, ...(data.sessionToken ? { sessionToken: data.sessionToken } : {}) };
   }
@@ -115,6 +119,8 @@ export interface ClaudeLaunchOptions {
   gatewayUrl?: string;
   gateway?: ManagedClaudeGateway;
   hookScriptPath?: string;
+  databasePath?: string;
+  branchId?: string;
 }
 
 export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<number> {
@@ -122,7 +128,8 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
   const gatewayUrl = options.gatewayUrl ?? 'http://localhost:8787';
   const gateway = options.gateway ?? new HttpManagedClaudeGateway(gatewayUrl);
   // Fail before launching Claude if the Gateway cannot register the session.
-  const session = await gateway.registerSession({ runtime: 'claude-code', cwd, label: options.label });
+  const nativeId=randomUUID();
+  const session = await gateway.registerSession({ runtime: 'claude-code', cwd, label: options.label, nativeId, branchId:options.branchId });
   const streamAbort = new AbortController();
   let settingsDir: string | undefined;
   let child: ChildProcess | undefined;
@@ -140,10 +147,14 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     const hookCommand = `${shellQuote(process.execPath)}${tsxLoader} ${shellQuote(hookScriptPath)}`;
     await writeFile(settingsPath, JSON.stringify(createClaudeHookSettings(hookCommand)), { mode: 0o600 });
 
+    const mcpPath=join(settingsDir,'mcp.json');
+    const database=options.databasePath??process.env.AGENTREE_DATABASE_PATH??join(process.env.GATEWAY_DATA_DIR??join(homedir(),'.local','share','agentree'),'gateway.sqlite');
+    await writeFile(mcpPath,JSON.stringify({mcpServers:{agentree:nativeMcpConfig(database,{gatewayUrl,sessionId:session.sessionId,sessionToken:session.sessionToken??''})}}),{mode:0o600});
     const claudeArgs = options.args ?? [];
+    if(claudeArgs.some(arg=>/^--(settings|session-id|resume|continue|mcp-config)(=|$)/.test(arg)||arg==='-r'||arg==='-c')) throw new Error('Managed Claude owns native identity and configuration; start a fresh session');
     if (claudeArgs.includes('--settings')) throw new Error('Managed Claude owns --settings for its hook configuration');
     const { HARNESS_ADMIN_TOKEN: _adminToken, HARNESS_SESSION_TOKEN: _priorSessionToken, ...childEnv } = process.env;
-    child = spawn(options.command ?? 'claude', ['--settings', settingsPath, ...claudeArgs], {
+    child = spawn(options.command ?? 'claude', ['--settings', settingsPath, '--session-id',nativeId,'--mcp-config',mcpPath, ...claudeArgs], {
       cwd,
       stdio: 'inherit',
       env: { ...childEnv, HARNESS_GATEWAY_URL: gatewayUrl, HARNESS_SESSION_ID: session.sessionId,

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { CodexEventJournal } from './codex-journal.js';
 import { createInterface } from 'node:readline';
 import type { NormalizedEvent } from '../../contracts/src/index.js';
@@ -20,6 +20,7 @@ interface PendingRequest { resolve(value: unknown): void; reject(error: Error): 
 
 export interface CodexAppServerOptions {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   journalPath?: string;
   onServerRequest?: (request: { method: string; params?: unknown }) => Promise<unknown>;
   command?: string;
@@ -28,6 +29,7 @@ export interface CodexAppServerOptions {
   clientInfo?: { name: string; title: string; version: string };
   /** Optional native thread/start parameters, such as model selection. */
   threadStartParams?: JsonObject;
+  threadResumeParams?: JsonObject;
   /** Last durable event cursor, used to continue stable event numbering on resume. */
   initialCursor?: AdapterCursor;
 }
@@ -199,7 +201,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     try {
       await CodexAppServerAdapter.initialize(rpc, options);
       const adapter = new CodexAppServerAdapter(rpc, nativeId, options);
-      await rpc.request('thread/resume', { threadId: nativeId });
+      await rpc.request('thread/resume', { ...options.threadResumeParams, threadId: nativeId });
       return adapter;
     } catch (error) {
       await rpc.close();
@@ -280,7 +282,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     const timestamp = typeof row.timestamp === 'string' ? row.timestamp : new Date().toISOString();
     const record = {
       sequence: this.sequence,
-      nativeId: `codex:${this.nativeId}:event:${randomUUID()}`,
+      nativeId: this.eventIdentity(notification),
       type: notification.method,
       occurredAt: timestamp,
       // Preserve the native envelope and expose file-change fields understood by sync.
@@ -289,6 +291,17 @@ export class CodexAppServerAdapter implements AgentAdapter {
     // Journal before exposing the observation so a failed cursor save can replay it.
     this.journal.save(this.sequence, [...this.history, record]);
     this.history.push(record);
+  }
+
+  private eventIdentity(notification: RpcNotification): string {
+    const params = notification.params && typeof notification.params === 'object' ? notification.params as JsonObject : {};
+    const item = params.item && typeof params.item === 'object' ? params.item as JsonObject : {};
+    const turn = params.turn && typeof params.turn === 'object' ? params.turn as JsonObject : {};
+    // Native lifecycle/item IDs can be replayed after resume. Deltas have no stable
+    // per-chunk identifier: preserve each occurrence and rely on the durable spool.
+    const nativeKey = !notification.method.endsWith('/delta') &&
+      (typeof params.itemId === 'string' || typeof item.id === 'string' || typeof turn.id === 'string' || typeof params.turnId === 'string');
+    return `codex:${this.nativeId}:event:${nativeKey ? createHash('sha256').update(canonical(notification)).digest('hex') : randomUUID()}`;
   }
 
   private sequenceFor(record: NativeRecord & { sequence: number }): number {
@@ -303,7 +316,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     const child = spawn(options.command ?? 'codex', options.args ?? ['app-server', '--listen', 'stdio://'], {
       cwd: options.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: withoutAdmin(options.env ?? process.env),
     });
     // The protocol uses stdout only. Drain stderr to avoid child-process backpressure.
     child.stderr.resume();
@@ -322,4 +335,12 @@ export class CodexAppServerAdapter implements AgentAdapter {
     if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error('Invalid initial Codex event cursor');
     return sequence;
   }
+}
+
+function withoutAdmin(env:NodeJS.ProcessEnv):NodeJS.ProcessEnv { const { HARNESS_ADMIN_TOKEN:_admin,...safe }=env; return safe; }
+function canonical(value:unknown):string {
+  if(value===undefined)return 'null';
+  if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';
+  if(value!==null&&typeof value==='object')return '{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+canonical(v)).join(',')+'}';
+  return JSON.stringify(value);
 }

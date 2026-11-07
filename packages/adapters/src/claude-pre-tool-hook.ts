@@ -1,3 +1,4 @@
+import { observeClaudeHook } from './claude-observer.js';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
@@ -110,15 +111,27 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+let activeHookEventName:string|undefined;
 async function main(): Promise<void> {
   const raw = await readStdin();
   const gatewayUrl = process.env.HARNESS_GATEWAY_URL ?? 'http://localhost:8787';
-  await handleClaudePreToolHook(raw, process.env, createClaudeDecideClient(gatewayUrl));
+  const event = JSON.parse(raw) as {hook_event_name?:string};
+  activeHookEventName=event.hook_event_name;
+  if(event.hook_event_name==='PostToolUse'||event.hook_event_name==='PostToolUseFailure') {
+    if(process.env.HARNESS_SESSION_ID) await observeClaudeHook(raw);
+    return;
+  }
+  const decide=createClaudeDecideClient(gatewayUrl);
+  await handleClaudePreToolHook(raw, process.env, async request => {
+    await observeClaudeHook(raw);
+    return decide(request);
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void main().catch(error => {
     process.stderr.write(`[Harness] Hook failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    if(activeHookEventName==='PostToolUse'||activeHookEventName==='PostToolUseFailure') { process.exitCode=1; return; }
     process.stdout.write(JSON.stringify({ hookSpecificOutput: {
       hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: '[Harness] Blocked by Gateway: 网关不可用',
     } }));
