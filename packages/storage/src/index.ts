@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import type { EventPage, EventQuery, SequencedEvent } from '../../contracts/src/index.js';
 import { DatabaseSync } from 'node:sqlite';
 
 export interface StoredEvent {
@@ -19,8 +21,9 @@ export class SqliteStore {
 
   private migrate(): void {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
-    if (version > 1) throw new Error('Unsupported database schema version');
-    if (version === 1) return;
+    if (version > 2) throw new Error('Unsupported database schema version');
+    if (version === 2) return;
+    if (version === 0) {
     this.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS entities (
@@ -82,10 +85,116 @@ export class SqliteStore {
         PRAGMA user_version = 1;
       `);
     });
+    }
+    this.transaction(() => {
+      this.db.exec(`
+        DROP TRIGGER immutable_event_update;
+        DROP TRIGGER immutable_event_delete;
+        DROP TRIGGER immutable_commit_delete;
+        DROP TRIGGER entity_references_insert;
+        ALTER TABLE events RENAME TO events_v1;
+        CREATE TABLE events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          id TEXT NOT NULL UNIQUE,
+          workspace_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          native_id TEXT NOT NULL,
+          data TEXT NOT NULL CHECK(json_valid(data)),
+          UNIQUE(workspace_id, source, native_id)
+        );
+        INSERT INTO events(sequence,id,workspace_id,source,native_id,data)
+          SELECT rowid,id,workspace_id,source,native_id,data FROM events_v1 ORDER BY rowid;
+        DROP TABLE events_v1;
+        CREATE TRIGGER immutable_event_update BEFORE UPDATE ON events
+          BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
+        CREATE TRIGGER immutable_event_delete BEFORE DELETE ON events
+          BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
+        CREATE INDEX events_workspace_sequence ON events(workspace_id,sequence);
+        CREATE INDEX events_session_sequence ON events(workspace_id,json_extract(data,'$.sessionId'),sequence);
+        CREATE INDEX entities_kind_workspace ON entities(kind,workspace_ref);
+        CREATE UNIQUE INDEX branch_names ON entities(workspace_ref,json_extract(data,'$.name')) WHERE kind='branch';
+        CREATE UNIQUE INDEX session_native_identity ON entities(workspace_ref,json_extract(data,'$.runtime'),json_extract(data,'$.nativeId')) WHERE kind='session';
+        CREATE TABLE decision_changes (
+          branch_id TEXT NOT NULL REFERENCES entities(id),
+          revision INTEGER NOT NULL,
+          identity TEXT NOT NULL,
+          commit_id TEXT REFERENCES entities(id),
+          PRIMARY KEY(branch_id,identity,revision)
+        );
+        CREATE TRIGGER immutable_decision_update BEFORE UPDATE ON decision_changes
+          BEGIN SELECT RAISE(ABORT, 'decision history is immutable'); END;
+        CREATE TRIGGER immutable_decision_delete BEFORE DELETE ON decision_changes
+          BEGIN SELECT RAISE(ABORT, 'decision history is immutable'); END;
+      `);
+      // Backfill pre-inheritance workspaces without rewriting any commits or events.
+      for (const workspace of this.list<{id:string; mainBranchId?:string}>('workspace')) {
+        const main = this.db.prepare("SELECT id FROM entities WHERE kind='branch' AND workspace_ref=? AND json_extract(data,'$.name')='main'").get(workspace.id) as {id:string}|undefined;
+        const mainId = main?.id ?? randomUUID();
+        if (!main) this.insert(mainId, 'branch', {id:mainId, workspaceId:workspace.id, name:'main', revision:0, restricted:true});
+        else {
+          const branch = this.get<Record<string,unknown>>(mainId)!;
+          this.put(mainId, 'branch', {...branch, restricted:true});
+        }
+        this.put(workspace.id, 'workspace', {...workspace, mainBranchId:mainId});
+      }
+      const rows = this.db.prepare(`SELECT bc.branch_id,bc.revision,e.data FROM branch_commits bc
+        JOIN entities e ON e.id=bc.commit_id WHERE json_extract(e.data,'$.knowledge.kind')='decision'
+        ORDER BY bc.branch_id,bc.revision`).all() as Array<{branch_id:string;revision:number;data:string}>;
+      for (const row of rows) {
+        const commit = JSON.parse(row.data);
+        const scope = commit.knowledge.scope;
+        const identity = JSON.stringify(scope.type === 'workspace' ? [commit.knowledge.key, 'workspace']
+          : scope.type === 'task' ? [commit.knowledge.key, 'task', scope.taskId]
+          : [commit.knowledge.key, scope.type, scope.rootId ?? null, scope.path.replace(/\\/g, '/').split('/').filter((p: string) => p && p !== '.').join('/') || '.']);
+        this.recordDecision(row.branch_id,row.revision,identity,commit.id);
+      }
+      // Legacy reviews did not pin inherited main. Existing nonempty main makes them stale.
+      for (const merge of this.list<{id:string;workspaceId:string}>('merge')) {
+        const workspace = this.get<{mainBranchId:string}>(merge.workspaceId)!;
+        const main = this.get<{revision:number}>(workspace.mainBranchId)!;
+        this.put(merge.id,'merge',{...merge,expectedMainRevision:main.revision === 0 ? 0 : -1});
+      }
+      this.db.exec('PRAGMA user_version = 2');
+    });
   }
 
-  transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
+  recordDecision(branchId: string, revision: number, identity: string, commitId: string | null): void {
+    this.db.prepare('INSERT INTO decision_changes(branch_id,revision,identity,commit_id) VALUES(?,?,?,?)').run(branchId, revision, identity, commitId);
+  }
+
+  decisions<T>(branchId: string, revision: number): T[] {
+    const rows = this.db.prepare(`SELECT e.data FROM (
+      SELECT commit_id, ROW_NUMBER() OVER (PARTITION BY identity ORDER BY revision DESC) AS rank
+      FROM decision_changes WHERE branch_id=? AND revision<=?
+    ) d JOIN entities e ON e.id=d.commit_id WHERE d.rank=1`).all(branchId,revision) as Array<{data:string}>;
+    return rows.map(row => JSON.parse(row.data) as T);
+  }
+
+  event<T>(id: string): T | undefined {
+    const row = this.db.prepare('SELECT data,sequence FROM events WHERE id=?').get(id) as {data:string;sequence:number}|undefined;
+    return row ? {...JSON.parse(row.data), sequence:row.sequence} as T : undefined;
+  }
+
+  eventPage(workspaceId: string, query: EventQuery = {}): EventPage {
+    const after = query.afterSequence ?? 0;
+    const through = query.throughSequence ?? Number(this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM events WHERE workspace_id=?').get(workspaceId)!.n);
+    const clauses = ['workspace_id=?','sequence>?','sequence<=?'];
+    const params: (string|number)[] = [workspaceId,after,through];
+    for (const field of ['sessionId','source','type'] as const) {
+      if (query[field] !== undefined) {
+        clauses.push(field === 'source' ? 'source=?' : `json_extract(data,'$.${field}')=?`);
+        params.push(query[field]!);
+      }
+    }
+    const limit = query.limit ?? 100;
+    const rows = this.db.prepare(`SELECT data,sequence FROM events WHERE ${clauses.join(' AND ')} ORDER BY sequence LIMIT ?`).all(...params,limit+1) as Array<{data:string;sequence:number}>;
+    const hasMore = rows.length > limit;
+    const events = rows.slice(0,limit).map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
+    return {events, nextSequence:hasMore ? events.at(-1)!.sequence : Math.max(after,through), throughSequence:through, hasMore};
+  }
+
+  transaction<T>(fn: () => T, write = true): T {
+    this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
     try {
       const result = fn();
       this.db.exec('COMMIT');
@@ -128,8 +237,8 @@ export class SqliteStore {
   }
 
   events<T = StoredEvent>(): T[] {
-    const rows = this.db.prepare('SELECT data FROM events ORDER BY rowid').all() as Array<{ data: string }>;
-    return rows.map(({ data }) => JSON.parse(data) as T);
+    const rows = this.db.prepare('SELECT data,sequence FROM events ORDER BY sequence').all() as Array<{ data: string; sequence: number }>;
+    return rows.map(row => ({...JSON.parse(row.data), sequence:row.sequence}) as T);
   }
 
   close(): void {
