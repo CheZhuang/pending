@@ -46,12 +46,13 @@ class DemoAgent {
   static async connect(label: string, store: SqliteStore, session: Session): Promise<DemoAgent> {
     // The daemon binds the identity; the MCP caller cannot choose who it is.
     const service = new AgentreeService(store, { type: 'agent', sessionId: session.id });
-    const server = createAgentreeMcpServer({ session, service });
+    const ledger = new EntityLedger(store);
+    const server = createAgentreeMcpServer({ session, service, ledger });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: label, version: '0.0.0' });
     await server.connect(serverSide);
     await client.connect(clientSide);
-    return new DemoAgent(label, session, service, client, new ContextSync(service, new EntityLedger(store)));
+    return new DemoAgent(label, session, service, client, new ContextSync(service, ledger));
   }
 
   /** Call one of B's MCP tools and unwrap `{ ok, data }`. */
