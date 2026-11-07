@@ -1,0 +1,119 @@
+<!-- App layout: navigation, workspace picker, live connection state, mock/live switch, and pairing. -->
+<script setup>
+import { computed, h, onMounted, ref, watch } from 'vue';
+import { RouterLink, RouterView, useRoute } from 'vue-router';
+import {
+  NAlert, NBadge, NButton, NDropdown, NLayout, NLayoutContent, NLayoutHeader, NLayoutSider, NMenu, NSelect, NSpin, NTag,
+} from 'naive-ui';
+import PairDialog from './PairDialog.vue';
+import { switchMode } from '../api/index.js';
+import { describe } from '../api/errors.js';
+import { boot, selectWorkspace, state } from '../state.js';
+import { frappe } from '../theme.js';
+
+const route = useRoute();
+const narrow = () => window.innerWidth < 900;
+const collapsed = ref(narrow());
+// Collapse the menu on narrow screens, and after navigating there.
+window.addEventListener('resize', () => { if (narrow()) collapsed.value = true; });
+watch(() => route.fullPath, () => { if (narrow()) collapsed.value = true; });
+
+const pendingReviews = computed(() => state.changed.reviews); // touch so the menu re-renders on review events
+const menu = computed(() => {
+  void pendingReviews.value;
+  return [
+    { key: 'overview', label: () => h(RouterLink, { to: '/' }, () => 'Overview') },
+    { key: 'activity', label: () => h(RouterLink, { to: '/activity' }, () => 'Activity') },
+    { key: 'reviews', label: () => h(RouterLink, { to: '/reviews' }, () => 'Reviews') },
+    { key: 'context', label: () => h(RouterLink, { to: '/context' }, () => 'Context') },
+  ];
+});
+
+const workspaceOptions = computed(() => state.workspaces.map((w) => ({ label: w.name, value: w.id })));
+
+const connection = computed(() => ({
+  idle: { text: 'Not connected', color: frappe.overlay1 },
+  connecting: { text: 'Connecting…', color: frappe.yellow },
+  live: { text: 'Live', color: frappe.green },
+  reconnecting: { text: 'Reconnecting…', color: frappe.peach },
+  closed: { text: 'Stream closed', color: frappe.red },
+}[state.connection]));
+
+const modeOptions = [
+  { label: 'Mock data (in-browser)', key: 'mock' },
+  { label: 'Live gateway', key: 'live' },
+];
+
+const fatal = computed(() => (state.fatal ? describe(state.fatal) : null));
+
+onMounted(boot);
+</script>
+
+<template>
+  <NLayout has-sider style="height: 100vh">
+    <NLayoutSider
+      bordered collapse-mode="width" :collapsed-width="0" :width="188" :collapsed="collapsed"
+      show-trigger="bar" @collapse="collapsed = true" @expand="collapsed = false"
+    >
+      <div class="brand">
+        <img src="/favicon.svg" alt="" width="26" height="26" />
+        <span>Agentree</span>
+      </div>
+      <NMenu :value="route.name" :options="menu" />
+      <div v-if="!collapsed" class="sider-foot muted">
+        <div>{{ state.mode === 'mock' ? 'Mock gateway' : state.baseUrl }}</div>
+      </div>
+    </NLayoutSider>
+
+    <NLayout>
+      <NLayoutHeader bordered class="header">
+        <NSelect
+          class="ws-select" size="small" placeholder="No workspace"
+          :options="workspaceOptions" :value="state.workspaceId" @update:value="selectWorkspace"
+        />
+        <div class="spacer" />
+        <span class="conn">
+          <NBadge dot :color="connection.color" />
+          <span class="conn-text">{{ connection.text }}</span>
+          <span v-if="state.lastSeq" class="muted mono">#{{ state.lastSeq }}</span>
+        </span>
+        <NDropdown trigger="click" :options="modeOptions" @select="switchMode">
+          <NTag :type="state.mode === 'mock' ? 'warning' : 'success'" size="small" round class="mode-tag">
+            {{ state.mode === 'mock' ? 'MOCK' : 'LIVE' }} ▾
+          </NTag>
+        </NDropdown>
+      </NLayoutHeader>
+
+      <NLayoutContent :native-scrollbar="false" content-style="min-height: calc(100vh - 53px)">
+        <NAlert v-if="fatal" type="error" :title="fatal.title" class="banner">
+          {{ fatal.hint }}
+          <template #action><NButton size="small" @click="boot">Retry</NButton></template>
+        </NAlert>
+        <div v-if="state.loading && !state.workspaces.length" class="center"><NSpin /></div>
+        <div v-else-if="!state.workspaces.length && !fatal && !state.needsLogin" class="page">
+          <h1 class="page-title">No workspace yet</h1>
+          <p class="page-sub">Register an agent session with the gateway (for example the managed Claude launcher), or create one with <span class="mono">npm run agentree -- init &lt;name&gt;</span>.</p>
+        </div>
+        <RouterView v-else-if="state.workspaceId" />
+      </NLayoutContent>
+    </NLayout>
+  </NLayout>
+  <PairDialog />
+</template>
+
+<style scoped>
+.brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; font-weight: 700; font-size: 16px; color: #c6d0f5; }
+.sider-foot { position: absolute; bottom: 14px; left: 18px; right: 12px; font-size: 11.5px; word-break: break-all; }
+.header { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 18px; }
+.ws-select { width: 200px; }
+.spacer { flex: 1; }
+.conn { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.mode-tag { cursor: pointer; }
+.banner { margin: 16px 24px 0; }
+.center { display: flex; justify-content: center; padding: 80px 0; }
+@media (max-width: 640px) {
+  .header { gap: 10px; padding: 0 12px 0 16px; }
+  .ws-select { width: 140px; }
+  .conn .mono, .conn-text { display: none; }
+}
+</style>
