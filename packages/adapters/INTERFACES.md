@@ -1,22 +1,15 @@
 # B package interface notes
 
-This package currently depends on the shared contracts and core service directly;
-it does not define a second copy of Agentree domain types.
+Adapters and MCP reuse `packages/contracts` domain types and A's `ApplicationService`. Identity is constructed at the trusted daemon boundary; native/model payloads never choose an Actor. Observed events grant no execution authority.
 
-## Available contracts
+## Implemented integration
 
-- `Session`, `NormalizedEvent`, `Actor`, `PolicyDecision`, `Knowledge`, and merge/review models are in `packages/contracts`.
-- `ApplicationService` and `AgentreeService` are in `packages/core`.
-- `NormalizedEvent.mode` distinguishes `observed` from `controlled`; core ingestion accepts observed events only.
-- Core constructs agent identity from a trusted `Actor` binding. Adapter or MCP input must not choose an actor ID.
-- Event deduplication currently uses `(workspaceId, source, nativeId)` in SQLite.
+- Administrative native-session registration helpers validate the returned branch/runtime/native ID binding.
+- `SqliteCursorStore` persists adapter checkpoints through the generic entity API. Event deduplication uses `(workspaceId, source, nativeId)`.
+- Codex keeps uncheckpointed observations in a local delivery journal. Normalized file-change events expose `item.changes` and `cwd` for C's `extractTouches`, while retaining the original notification params.
+- MCP now uses C's `ContextSync` with an injected durable `EntityLedger`. Pull/retry, subscriptions, acknowledgement, budgets and authority upgrades share C's implementation.
+- MCP publications support `impactScope` and expected branch/main snapshot tokens. Merge requests can include the expected inherited-main revision.
 
-## Open integration questions for A/C
+## Remaining host integration
 
-1. Where should durable native transcript cursors live, and what API should adapters use to read and atomically advance them?
-2. Which daemon API registers native sessions? Core `registerSession` is an administrative operation and requires a branch plus trusted agent identity.
-3. What transport/authentication binds an MCP connection to its Agentree session?
-4. What is the agreed `context_sync` cursor and delta contract? Current core exposes `context` and `lookup`, not an incremental sync method.
-5. What daemon endpoint exposes event ingestion and policy decisions? No Gateway HTTP API exists in this checkout yet.
-
-Until those are agreed, adapters use injected interfaces and in-memory mocks. No private SQLite schema or guessed HTTP routes should be added here.
+The HTTP entry point is still a health stub. Gateway transport authentication, trusted launch registration (including native ID allocation), specific tool policy/approval decisions, and end/kill lifecycle APIs remain A/B integration requirements. See `packages/mcp/README.md` for the concrete handoff. CLI entry points, Claude transcript observation and native-runtime end-to-end validation remain separate work.

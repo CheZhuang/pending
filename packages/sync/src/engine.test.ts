@@ -209,7 +209,7 @@ test('acknowledgement is explicit and survives a resumed session; lost context c
       const resumed = new ContextSync(bobAgent, new EntityLedger(reopened));
       assert.deepEqual(resumed.sync({ session: f.bob }).items, []);
       const again = resumed.sync({ session: f.bob, redeliverUnacknowledged: true });
-      assert.deepEqual(again.items.map((i) => i.key), ['b']);
+      assert.deepEqual(again.items.map((i) => i.key), delta.items.slice(1).map((i) => i.key));
       assert.equal(resumed.status(f.bob.id).items[again.items[0].itemId].attempts, 2);
     } finally { reopened.close(); }
   } finally { f.cleanup(); }
