@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAppServerAdapter } from './codex-app-server.js';
 import { runManagedClaude } from './claude-launcher.js';
+import { handleClaudePreToolHook } from './claude-pre-tool-hook.js';
 import { MockGatewayClient } from './mock.js';
 import { SqliteStore } from '../../storage/src/index.js';
 import { AgentreeService } from '../../core/src/index.js';
@@ -72,15 +73,46 @@ test('uncheckpointed observations replay with their original IDs after restart',
 
 test('source Claude launcher executes its hook from an unrelated project directory',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'agentree-claude-regression-'));
- const child=join(dir,'fake-claude.cjs');let ended=false;
+ const child=join(dir,'fake-claude.cjs');let ended=false;let reported:{exitCode:number|null;signal:string|null}|undefined;
  try {
-  await writeFile(child,`#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');const settings=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));const out=cp.execSync(settings.hooks.PreToolUse[0].hooks[0].command,{input:'{}',encoding:'utf8'});if(JSON.parse(out).hookSpecificOutput.permissionDecision!=='deny')process.exit(2);`,{mode:0o700});
+  await writeFile(child,`#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');if(process.env.HARNESS_SESSION_TOKEN!=='managed-session-token')process.exit(3);const settings=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));const out=cp.execSync(settings.hooks.PreToolUse[0].hooks[0].command,{input:'{}',encoding:'utf8'});if(JSON.parse(out).hookSpecificOutput.permissionDecision!=='deny')process.exit(2);`,{mode:0o700});
   const exit=await runManagedClaude({cwd:dir,label:'regression',command:child,gateway:{
-   async registerSession(){return {sessionId:'test',afterSeq:0};},
+   async registerSession(){return {sessionId:'test',sessionToken:'managed-session-token',afterSeq:0};},
    async *stream(_seq,signal){await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));},
-   async endSession(){ended=true;},
+   async endSession(_sessionId,observedExit){ended=true;reported=observedExit;},
   }});
-  assert.equal(exit,0);assert.equal(ended,true);
+  assert.equal(exit,0);assert.equal(ended,true);assert.deepEqual(reported,{exitCode:0,signal:null});
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('Claude PreToolUse retries retain the native tool_use_id as requestId', async()=>{
+ const requests:Array<{requestId:string;sessionId:string;tool:string;input:unknown;nativeSessionId:string;cwd:string}>=[];
+ const raw=JSON.stringify({session_id:'native-1',cwd:'/tmp/project',hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{path:'/tmp/a'},tool_use_id:'tool-use-stable-1'});
+ const decide=async(request:typeof requests[number])=>{requests.push(request);return {outcome:'allow' as const};};
+ for(let i=0;i<2;i++){
+  const output:string[]=[];
+  assert.equal(await handleClaudePreToolHook(raw,{HARNESS_SESSION_ID:'agentree-session'},decide,line=>output.push(line),()=>undefined),0);
+  assert.deepEqual(output,[]);
+ }
+ assert.equal(requests.length,2);
+ assert.equal(requests[0]!.requestId,'tool-use-stable-1');
+ assert.equal(requests[1]!.requestId,requests[0]!.requestId);
+ assert.equal(requests[0]!.sessionId,'agentree-session');
+});
+
+test('Claude launcher responds to session.kill-requested and reports observed child exit',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'agentree-claude-kill-regression-'));
+ const child=join(dir,'waiting-claude.cjs');const ready=join(dir,'ready');
+ let reported:{exitCode:number|null;signal:string|null}|undefined;
+ try{
+  await writeFile(child,`#!${process.execPath}\nconst fs=require('node:fs');process.on('SIGTERM',()=>process.exit(0));fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`,{mode:0o700});
+  const exit=await runManagedClaude({cwd:dir,label:'kill regression',command:child,gateway:{
+   async registerSession(){return {sessionId:'managed-session',sessionToken:'session-token',afterSeq:0};},
+   async *stream(_seq,signal){const deadline=Date.now()+2000;while(!signal.aborted){try{await access(ready);break;}catch{if(Date.now()>=deadline)throw new Error('Child did not become ready');await new Promise(resolve=>setTimeout(resolve,10));}}if(signal.aborted)return;yield {seq:1,type:'session.kill-requested',sessionId:'managed-session'};await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));},
+   async endSession(_sessionId,observedExit){reported=observedExit;},
+  }});
+  assert.equal(exit,0);
+  assert.deepEqual(reported,{exitCode:0,signal:null});
  }finally{await rm(dir,{recursive:true,force:true});}
 });
 

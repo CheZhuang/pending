@@ -8,6 +8,7 @@ import { createClaudeHookSettings } from './claude-settings.js';
 export interface ManagedClaudeSession {
   sessionId: string;
   afterSeq: number;
+  sessionToken?: string;
 }
 
 export interface ManagedClaudeEvent {
@@ -19,22 +20,31 @@ export interface ManagedClaudeEvent {
 export interface ManagedClaudeGateway {
   registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession>;
   stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent>;
-  endSession(sessionId: string): Promise<void>;
+  endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void>;
 }
 
 /** REST bridge for the session/stream routes described by the shared gateway plan. */
 export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
-  constructor(private readonly baseUrl = 'http://localhost:8787') {}
+  private sessionToken?: string;
+
+  constructor(
+    private readonly baseUrl = 'http://localhost:8787',
+    private readonly adminToken = process.env.HARNESS_ADMIN_TOKEN,
+  ) {}
 
   async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
+      method: 'POST', headers: {
+        'content-type': 'application/json',
+        ...(this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {}),
+      }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`Gateway session registration failed with HTTP ${response.status}`);
-    const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number };
+    const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number; sessionToken?: string };
     const sessionId = data.sessionId ?? data.id;
     if (!sessionId) throw new Error('Gateway session registration returned no session id');
-    return { sessionId, afterSeq: data.seq ?? data.currentSeq ?? 0 };
+    this.sessionToken = data.sessionToken;
+    return { sessionId, afterSeq: data.seq ?? data.currentSeq ?? 0, ...(data.sessionToken ? { sessionToken: data.sessionToken } : {}) };
   }
 
   async *stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent> {
@@ -46,7 +56,10 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     const connectTimer = setTimeout(() => connectAbort.abort(new Error('Gateway event stream connection timed out')), 30_000);
     let response: Response;
     try {
-      response = await fetch(url, { headers: { accept: 'text/event-stream, application/x-ndjson' }, signal: connectAbort.signal });
+      response = await fetch(url, { headers: {
+        accept: 'text/event-stream, application/x-ndjson',
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
+      }, signal: connectAbort.signal });
     } catch (error) {
       clearTimeout(connectTimer);
       signal.removeEventListener('abort', relayAbort);
@@ -80,8 +93,16 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     }
   }
 
-  async endSession(sessionId: string): Promise<void> {
-    const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/end`, this.baseUrl), { method: 'POST', signal: AbortSignal.timeout(5_000) });
+  async endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void> {
+    const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/end`, this.baseUrl), {
+      method: 'POST',
+      headers: {
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
+        ...(exit ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(exit ? { body: JSON.stringify(exit) } : {}),
+      signal: AbortSignal.timeout(5_000),
+    });
     if (!response.ok) throw new Error(`Gateway session end failed with HTTP ${response.status}`);
   }
 }
@@ -105,6 +126,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
   const streamAbort = new AbortController();
   let settingsDir: string | undefined;
   let child: ChildProcess | undefined;
+  let childExit: { exitCode: number | null; signal: string | null } | undefined;
   let streamTask: Promise<void> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let stopping = false;
@@ -120,10 +142,12 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
 
     const claudeArgs = options.args ?? [];
     if (claudeArgs.includes('--settings')) throw new Error('Managed Claude owns --settings for its hook configuration');
+    const { HARNESS_ADMIN_TOKEN: _adminToken, HARNESS_SESSION_TOKEN: _priorSessionToken, ...childEnv } = process.env;
     child = spawn(options.command ?? 'claude', ['--settings', settingsPath, ...claudeArgs], {
       cwd,
       stdio: 'inherit',
-      env: { ...process.env, HARNESS_GATEWAY_URL: gatewayUrl, HARNESS_SESSION_ID: session.sessionId },
+      env: { ...childEnv, HARNESS_GATEWAY_URL: gatewayUrl, HARNESS_SESSION_ID: session.sessionId,
+        ...(session.sessionToken ? { HARNESS_SESSION_TOKEN: session.sessionToken } : {}) },
     });
     const managedChild = child;
     const killChild = () => {
@@ -136,7 +160,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
 
     streamTask = (async () => {
       for await (const event of gateway.stream(session.afterSeq, streamAbort.signal)) {
-        if (event.type === 'session.killed' && event.sessionId === session.sessionId) killChild();
+        if ((event.type === 'session.kill-requested' || event.type === 'session.killed') && event.sessionId === session.sessionId) killChild();
       }
       if (!streamAbort.signal.aborted) throw new Error('Gateway event stream closed unexpectedly');
     })().catch(error => {
@@ -150,24 +174,33 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     onSigterm = () => managedChild.kill('SIGTERM');
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
-    return await waitForExit(child);
+    return await waitForExit(child, exit => { childExit = exit; });
   } finally {
     streamAbort.abort();
     if (onSigint) process.off('SIGINT', onSigint);
     if (onSigterm) process.off('SIGTERM', onSigterm);
     if (killTimer) clearTimeout(killTimer);
     await streamTask;
-    await gateway.endSession(session.sessionId).catch(error => {
+    // Only report an end after observing the child exit. A spawn error is not
+    // evidence that the managed process exited, so leave that session for recovery.
+    if (childExit) await gateway.endSession(session.sessionId, childExit).catch(error => {
       process.stderr.write(`[Harness] Could not report session end: ${error instanceof Error ? error.message : String(error)}\n`);
     });
     if (settingsDir) await rm(settingsDir, { recursive: true, force: true });
   }
 }
 
-function waitForExit(child: ChildProcess): Promise<number> {
+function waitForExit(
+  child: ChildProcess,
+  onExit: (exit: { exitCode: number | null; signal: string | null }) => void,
+): Promise<number> {
   return new Promise((resolveExit, reject) => {
     child.once('error', reject);
-    child.once('exit', (code, signal) => resolveExit(code ?? (signal === 'SIGINT' ? 130 : 1)));
+    child.once('exit', (code, signal) => {
+      const exit = { exitCode: code, signal: signal === null ? null : String(signal) };
+      onExit(exit);
+      resolveExit(code ?? (signal === 'SIGINT' ? 130 : 1));
+    });
   });
 }
 
