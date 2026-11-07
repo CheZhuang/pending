@@ -23,10 +23,9 @@ export class SqliteStore {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
     if (version > 2) throw new Error('Unsupported database schema version');
     if (version === 2) return;
-    if (version === 0) {
     this.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS entities (
+      if (version === 0) this.db.exec(`
+        CREATE TABLE entities (
           id TEXT PRIMARY KEY,
           kind TEXT NOT NULL,
           data TEXT NOT NULL CHECK(json_valid(data)),
@@ -39,60 +38,29 @@ export class SqliteStore {
           merge_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.mergeId')) REFERENCES entities(id) DEFERRABLE INITIALLY DEFERRED,
           review_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.reviewId')) REFERENCES entities(id) DEFERRABLE INITIALLY DEFERRED
         );
-        CREATE TABLE IF NOT EXISTS events (
-          id TEXT PRIMARY KEY,
-          workspace_id TEXT NOT NULL,
-          source TEXT NOT NULL,
-          native_id TEXT NOT NULL,
-          data TEXT NOT NULL,
-          UNIQUE(workspace_id, source, native_id)
-        );
-        CREATE TABLE IF NOT EXISTS branch_commits (
+        CREATE TABLE branch_commits (
           branch_id TEXT NOT NULL REFERENCES entities(id),
           commit_id TEXT NOT NULL REFERENCES entities(id),
           revision INTEGER NOT NULL,
           UNIQUE(branch_id, revision),
           PRIMARY KEY(branch_id, commit_id)
         );
-        CREATE TRIGGER entity_references_insert BEFORE INSERT ON entities BEGIN
-          SELECT CASE WHEN json_extract(NEW.data, '$.workspaceId') IS NOT NULL AND NOT EXISTS
-            (SELECT 1 FROM entities WHERE id=json_extract(NEW.data, '$.workspaceId') AND kind='workspace')
-            THEN RAISE(ABORT, 'workspace reference missing') END;
-          SELECT CASE WHEN NEW.kind IN ('session','commit') AND NOT EXISTS
-            (SELECT 1 FROM entities WHERE id=json_extract(NEW.data, '$.branchId') AND kind='branch')
-            THEN RAISE(ABORT, 'branch reference missing') END;
-          SELECT CASE WHEN NEW.kind='session' AND NOT EXISTS
-            (SELECT 1 FROM entities WHERE id=json_extract(NEW.data, '$.agentId') AND kind='agent')
-            THEN RAISE(ABORT, 'agent reference missing') END;
-        END;
         CREATE TRIGGER entity_identity_update BEFORE UPDATE ON entities
         WHEN OLD.kind != NEW.kind OR json_extract(OLD.data,'$.id') != json_extract(NEW.data,'$.id')
-        BEGIN SELECT RAISE(ABORT, 'entity identity is immutable'); END;
+          BEGIN SELECT RAISE(ABORT, 'entity identity is immutable'); END;
         CREATE TRIGGER entity_delete BEFORE DELETE ON entities
-        BEGIN SELECT RAISE(ABORT, 'entity history cannot be deleted'); END;
-        CREATE TRIGGER IF NOT EXISTS immutable_commit_update
-          BEFORE UPDATE ON entities WHEN OLD.kind = 'commit'
+          BEGIN SELECT RAISE(ABORT, 'entity history cannot be deleted'); END;
+        CREATE TRIGGER immutable_commit_update BEFORE UPDATE ON entities WHEN OLD.kind = 'commit'
           BEGIN SELECT RAISE(ABORT, 'commit entities are immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS immutable_commit_delete
-          BEFORE DELETE ON entities WHEN OLD.kind = 'commit'
-          BEGIN SELECT RAISE(ABORT, 'commit entities are immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS immutable_event_update
-          BEFORE UPDATE ON events
-          BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS immutable_event_delete
-          BEFORE DELETE ON events
-          BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
-        PRAGMA user_version = 1;
       `);
-    });
-    }
-    this.transaction(() => {
-      this.db.exec(`
+      if (version === 1) this.db.exec(`
         DROP TRIGGER immutable_event_update;
         DROP TRIGGER immutable_event_delete;
         DROP TRIGGER immutable_commit_delete;
         DROP TRIGGER entity_references_insert;
         ALTER TABLE events RENAME TO events_v1;
+      `);
+      this.db.exec(`
         CREATE TABLE events (
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
           id TEXT NOT NULL UNIQUE,
@@ -102,9 +70,6 @@ export class SqliteStore {
           data TEXT NOT NULL CHECK(json_valid(data)),
           UNIQUE(workspace_id, source, native_id)
         );
-        INSERT INTO events(sequence,id,workspace_id,source,native_id,data)
-          SELECT rowid,id,workspace_id,source,native_id,data FROM events_v1 ORDER BY rowid;
-        DROP TABLE events_v1;
         CREATE TRIGGER immutable_event_update BEFORE UPDATE ON events
           BEGIN SELECT RAISE(ABORT, 'events are immutable'); END;
         CREATE TRIGGER immutable_event_delete BEFORE DELETE ON events
@@ -112,7 +77,6 @@ export class SqliteStore {
         CREATE INDEX events_workspace_sequence ON events(workspace_id,sequence);
         CREATE INDEX events_session_sequence ON events(workspace_id,json_extract(data,'$.sessionId'),sequence);
         CREATE INDEX entities_kind_workspace ON entities(kind,workspace_ref);
-        CREATE UNIQUE INDEX branch_names ON entities(workspace_ref,json_extract(data,'$.name')) WHERE kind='branch';
         CREATE UNIQUE INDEX session_native_identity ON entities(workspace_ref,json_extract(data,'$.runtime'),json_extract(data,'$.nativeId')) WHERE kind='session';
         CREATE TABLE decision_changes (
           branch_id TEXT NOT NULL REFERENCES entities(id),
@@ -126,6 +90,11 @@ export class SqliteStore {
         CREATE TRIGGER immutable_decision_delete BEFORE DELETE ON decision_changes
           BEGIN SELECT RAISE(ABORT, 'decision history is immutable'); END;
       `);
+      if (version === 1) this.db.exec(`
+        INSERT INTO events(sequence,id,workspace_id,source,native_id,data)
+          SELECT rowid,id,workspace_id,source,native_id,data FROM events_v1 ORDER BY rowid;
+        DROP TABLE events_v1;
+      `);
       // Backfill pre-inheritance workspaces without rewriting any commits or events.
       for (const workspace of this.list<{id:string; mainBranchId?:string}>('workspace')) {
         const main = this.db.prepare("SELECT id FROM entities WHERE kind='branch' AND workspace_ref=? AND json_extract(data,'$.name')='main'").get(workspace.id) as {id:string}|undefined;
@@ -136,6 +105,9 @@ export class SqliteStore {
           this.put(mainId, 'branch', {...branch, restricted:true});
         }
         this.put(workspace.id, 'workspace', {...workspace, mainBranchId:mainId});
+        const eventId = randomUUID();
+        this.appendEvent({id:eventId,workspaceId:workspace.id,source:'gateway',nativeId:eventId,
+          type:'workspace.main-initialized',mode:'controlled',payload:{mainBranchId:mainId,schemaVersion:2},occurredAt:new Date().toISOString()});
       }
       const rows = this.db.prepare(`SELECT bc.branch_id,bc.revision,e.data FROM branch_commits bc
         JOIN entities e ON e.id=bc.commit_id WHERE json_extract(e.data,'$.knowledge.kind')='decision'
@@ -205,8 +177,10 @@ export class SqliteStore {
     }
   }
 
-  get<T>(id: string): T | undefined {
-    const row = this.db.prepare('SELECT data FROM entities WHERE id = ?').get(id) as { data: string } | undefined;
+  get<T>(id: string, kind?: string): T | undefined {
+    const row = (kind === undefined
+      ? this.db.prepare('SELECT data FROM entities WHERE id=?').get(id)
+      : this.db.prepare('SELECT data FROM entities WHERE id=? AND kind=?').get(id,kind)) as {data:string}|undefined;
     return row === undefined ? undefined : JSON.parse(row.data) as T;
   }
 
