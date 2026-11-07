@@ -62,11 +62,13 @@ const str = (value: unknown) => (typeof value === 'string' && value.length > 0 ?
  * Pull file paths out of a normalized event payload. Supported shapes:
  * - `payload.touches: [{ path, rootId?, access }]`  (preferred adapter contract)
  * - Claude Code hooks/JSONL: `tool_name` + `tool_input.file_path | notebook_path | path`
- * - Codex file changes: `changes: [{ path }]` or `item.changes: [{ path }]`
+ * - B's normalized tool records: `tool` + `input.file_path | notebook_path | path`
+ * - Codex file changes: `changes`, `item.changes`, or App Server `params.item.changes: [{ path }]`
  */
 function rawPaths(event: NormalizedEvent): { cwd?: string; paths: Raw[] } {
   const payload = record(event.payload) ?? {};
-  const cwd = str(payload.cwd);
+  const params = record(payload.params);
+  const cwd = str(payload.cwd) ?? str(params?.cwd);
   const paths: Raw[] = [];
 
   if (Array.isArray(payload.touches)) {
@@ -76,15 +78,14 @@ function rawPaths(event: NormalizedEvent): { cwd?: string; paths: Raw[] } {
     }
   }
 
-  const input = record(payload.tool_input);
+  const input = record(payload.tool_input) ?? record(payload.input);
   const toolPath = str(input?.file_path) ?? str(input?.notebook_path) ?? str(input?.path);
   if (toolPath) {
-    const tool = str(payload.tool_name) ?? '';
+    const tool = str(payload.tool_name) ?? str(payload.tool) ?? '';
     paths.push({ path: toolPath, access: WRITE_TOOLS.test(tool) ? 'write' : READ_TOOLS.test(tool) ? 'read' : undefined });
   }
 
-  const item = record(payload.item);
-  for (const changes of [payload.changes, item?.changes]) {
+  for (const changes of [payload.changes, record(payload.item)?.changes, record(params?.item)?.changes]) {
     if (!Array.isArray(changes)) continue;
     for (const change of changes.map(record)) {
       const path = str(change?.path);

@@ -8,8 +8,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts apps/cli/src/*.test.ts",
-    "agentree": "node --import tsx apps/cli/src/main.ts"
+    "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts apps/cli/src/*.test.ts demo/*.test.ts",
+    "agentree": "node --import tsx apps/cli/src/main.ts",
+    "demo": "node --import tsx demo/two-agents.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
