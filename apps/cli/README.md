@@ -7,9 +7,11 @@ No GUI. Every command takes `--json` (`{ ok, data }` or `{ ok: false, error: { c
 npm run agentree -- --help          # requires Node 24+
 ```
 
-State lives in the user's application data directory (`~/Library/Application Support/agentree`
-on macOS, `$XDG_DATA_HOME/agentree` on Linux), never in the project. Override with
-`AGENTREE_HOME` or `--db <path>`. The human identity is `AGENTREE_USER` or the OS user name.
+The CLI reads and writes **the same SQLite file as the gateway daemon** (`npm start`):
+`$GATEWAY_DATA_DIR/gateway.sqlite`, by default `~/.local/share/agentree/gateway.sqlite` on macOS and Linux,
+never the project directory. So the CLI, the gateway and the web console all see the same workspaces,
+sessions, events and reviews, even while the gateway is running (SQLite WAL). Override with
+`AGENTREE_HOME=<dir>` or `--db <path>`. The human identity is `AGENTREE_USER` or the OS user name.
 
 ## Commands
 

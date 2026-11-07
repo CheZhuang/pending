@@ -70,6 +70,7 @@ Review (all decisions are authorized and audited by the gateway)
   review reject <id>
   review resolve <id> (--keep incoming|existing | --pick <n>=existing|incoming ...) [--no-apply]
 
+State: $AGENTREE_HOME, else $GATEWAY_DATA_DIR, else ~/.local/share/agentree — the same gateway.sqlite the gateway daemon uses.
 Ids accept unique prefixes; branches also accept names. Exit codes: 0 ok, 2 usage, 3 not authorized, 4 not found, 5 stale/conflict.`;
 
 const OPTIONS = {
