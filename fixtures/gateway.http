@@ -1,0 +1,77 @@
+@baseUrl = http://127.0.0.1:8787
+# Replace with the content of ~/.local/share/agentree/admin-token (or GATEWAY_DATA_DIR/admin-token).
+@adminToken = REPLACE_WITH_ADMIN_TOKEN
+# After registration, paste sessionToken from its response here.
+@sessionToken = REPLACE_WITH_SESSION_TOKEN
+@workspaceId = REPLACE_WITH_WORKSPACE_ID
+@sessionId = REPLACE_WITH_SESSION_ID
+@approvalId = REPLACE_WITH_PENDING_APPROVAL_ID
+@cursor = 0
+
+### Health check (no credential)
+GET {{baseUrl}}/health
+
+### Create workspace (admin)
+POST {{baseUrl}}/v1/workspaces
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"name":"Gateway fixture workspace","roots":[]}
+
+### Register a Claude session under a new workspace/branch (admin)
+# Registration with cwd will create a workspace and branch when no exact root exists.
+POST {{baseUrl}}/v1/sessions
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"runtime":"claude-code","cwd":"/tmp/gateway-fixture","label":"fixture-agent"}
+
+### Read workspaces (admin; copy the desired id above)
+GET {{baseUrl}}/v1/workspaces
+Authorization: Bearer {{adminToken}}
+
+### List sessions (admin; copy sessionId above)
+GET {{baseUrl}}/v1/sessions
+Authorization: Bearer {{adminToken}}
+
+### Ask for a tool decision (session; this waits for an admin decision)
+POST {{baseUrl}}/v1/decide
+Authorization: Bearer {{sessionToken}}
+Content-Type: application/json
+
+{"sessionId":"{{sessionId}}","tool":"Bash","input":{"command":"echo fixture"},"nativeSessionId":"native-fixture","cwd":"/tmp/gateway-fixture"}
+
+### Inspect pending approvals in another request/tab (admin)
+GET {{baseUrl}}/v1/approvals
+Authorization: Bearer {{adminToken}}
+
+### Approve a pending decision (admin; use its id as approvalId)
+POST {{baseUrl}}/v1/approvals/{{approvalId}}
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"decision":"approved","reason":"fixture approval"}
+
+### Denial alternative (do not run after approving the same approval)
+# POST {{baseUrl}}/v1/approvals/{{approvalId}}
+# Authorization: Bearer {{adminToken}}
+# Content-Type: application/json
+#
+# {"decision":"denied","reason":"fixture denial"}
+
+### Read workspace event history (admin)
+GET {{baseUrl}}/v1/workspaces/{{workspaceId}}/events?after=0&limit=100
+Authorization: Bearer {{adminToken}}
+
+### Resume global event stream (admin; Last-Event-ID takes precedence over after)
+GET {{baseUrl}}/v1/stream?after={{cursor}}&workspaceId={{workspaceId}}
+Authorization: Bearer {{adminToken}}
+Accept: text/event-stream
+
+### End session (session-scoped credential)
+POST {{baseUrl}}/v1/sessions/{{sessionId}}/end
+Authorization: Bearer {{sessionToken}}
+
+### Agent authority check: expected 403 DENY (agent cannot list/approve approvals)
+GET {{baseUrl}}/v1/approvals
+Authorization: Bearer {{sessionToken}}
