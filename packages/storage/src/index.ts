@@ -26,7 +26,15 @@ export class SqliteStore {
         CREATE TABLE IF NOT EXISTS entities (
           id TEXT PRIMARY KEY,
           kind TEXT NOT NULL,
-          data TEXT NOT NULL CHECK(json_valid(data))
+          data TEXT NOT NULL CHECK(json_valid(data)),
+          workspace_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.workspaceId')) REFERENCES entities(id),
+          branch_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.branchId')) REFERENCES entities(id),
+          agent_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.agentId')) REFERENCES entities(id),
+          session_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.provenance.sessionId')) REFERENCES entities(id),
+          source_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.sourceBranchId')) REFERENCES entities(id),
+          target_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.targetBranchId')) REFERENCES entities(id),
+          merge_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.mergeId')) REFERENCES entities(id) DEFERRABLE INITIALLY DEFERRED,
+          review_ref TEXT GENERATED ALWAYS AS (json_extract(data,'$.reviewId')) REFERENCES entities(id) DEFERRABLE INITIALLY DEFERRED
         );
         CREATE TABLE IF NOT EXISTS events (
           id TEXT PRIMARY KEY,
@@ -114,7 +122,7 @@ export class SqliteStore {
   appendEvent<T extends StoredEvent>(event: T): boolean {
     const result = this.db.prepare(`
       INSERT INTO events (id, workspace_id, source, native_id, data)
-      VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(workspace_id, source, native_id) DO NOTHING
     `).run(event.id, event.workspaceId, event.source, event.nativeId, JSON.stringify(event));
     return result.changes > 0;
   }
