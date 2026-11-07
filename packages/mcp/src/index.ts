@@ -13,6 +13,8 @@ export interface BoundMcpSession {
   service: ApplicationService;
   /** Durable delivery ledger supplied by the daemon (EntityLedger for SQLite). */
   ledger: DeliveryLedger;
+  /** Native hosts revalidate the runtime credential before every tool, including retries. */
+  authorize?: () => Promise<void>;
 }
 
 const contextOutputSchema = {
@@ -36,9 +38,9 @@ function failure(error: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
 }
 
-function tool<T>(work: (args: T) => unknown) {
+function tool<T>(work: (args: T) => unknown, authorize?: () => Promise<void>) {
   return async (args: T) => {
-    try { return success(work(args)); }
+    try { await authorize?.(); return success(await work(args)); }
     catch (error) { return failure(error); }
   };
 }
@@ -48,6 +50,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
   const session = { ...binding.session };
   const { service, ledger } = binding;
   const sync = new ContextSync(service, ledger);
+  const boundTool = <T>(work: (args:T) => unknown) => tool(work, binding.authorize);
   const server = new McpServer({ name: 'agentree', version: '0.1.0' });
 
   server.registerTool('workspace_status', {
@@ -55,7 +58,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     description: 'Show the workspace and logical branches bound to this Agentree session.',
     inputSchema: {},
     outputSchema: contextOutputSchema,
-  }, tool(() => ({
+  }, boundTool(() => ({
     workspace: service.workspace(session.workspaceId),
     branches: service.branches(session.workspaceId),
     currentSession: { id: session.id, runtime: session.runtime, branchId: session.branchId },
@@ -72,7 +75,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
       redeliverUnacknowledged: z.boolean().optional(),
     },
     outputSchema: contextOutputSchema,
-  }, tool((args: { requestId: string; level?: Level; budgetTokens?: number; redeliverUnacknowledged?: boolean }) => {
+  }, boundTool((args: { requestId: string; level?: Level; budgetTokens?: number; redeliverUnacknowledged?: boolean }) => {
     service.workspace(session.workspaceId); // also authorize cached response replay
     return sync.sync({ ...args, session });
   }));
@@ -82,7 +85,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     description: 'Confirm that this session has taken the delivered items into account.',
     inputSchema: { itemIds: z.array(z.string().min(1)).max(1000) },
     outputSchema: contextOutputSchema,
-  }, tool(({ itemIds }: { itemIds: string[] }) => {
+  }, boundTool(({ itemIds }: { itemIds: string[] }) => {
     service.workspace(session.workspaceId); // authorize before writing delivery metadata
     return { acknowledged: sync.acknowledge(session.id, itemIds) };
   }));
@@ -92,7 +95,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     description: 'Extend or override inferred focus with explicit workspace, folder, file or task scopes. Empty extend restores inferred focus.',
     inputSchema: { scopes: z.array(scopeSchema).max(100), mode: z.enum(['extend', 'override']).optional() },
     outputSchema: contextOutputSchema,
-  }, tool((args: FocusDeclaration) => {
+  }, boundTool((args: FocusDeclaration) => {
     const workspace = service.workspace(session.workspaceId);
     const scopes = args.scopes.map(scope => normalizeScope(scope, workspace.roots));
     sync.subscribe(session.id, { scopes, mode: args.mode ?? 'extend' });
@@ -104,7 +107,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     description: 'Read the current findings and accepted decisions for a branch in this workspace.',
     inputSchema: { branchId: z.string().min(1).optional() },
     outputSchema: contextOutputSchema,
-  }, tool(({ branchId }: { branchId?: string }) => {
+  }, boundTool(({ branchId }: { branchId?: string }) => {
     const selectedBranch = branchId ?? session.branchId;
     if (!service.branches(session.workspaceId).some(item => item.id === selectedBranch)) {
       throw new DomainError('NOT_FOUND', 'Branch is not in this workspace');
@@ -126,7 +129,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
       eventIds: z.array(z.string().min(1)).optional(),
     },
     outputSchema: contextOutputSchema,
-  }, tool((args: { kind: Knowledge['kind']; key: string; body: string; scope: Knowledge['scope']; impactScope?: Knowledge['scope']; expected?: { branchRevision: number; mainRevision: number }; eventIds?: string[] }) => {
+  }, boundTool((args: { kind: Knowledge['kind']; key: string; body: string; scope: Knowledge['scope']; impactScope?: Knowledge['scope']; expected?: { branchRevision: number; mainRevision: number }; eventIds?: string[] }) => {
     const knowledge: Knowledge = { kind: args.kind, key: args.key, body: args.body, scope: args.scope, impactScope: args.impactScope };
     return service.publish(session.branchId, knowledge, args.eventIds ?? [], args.expected);
   }));
@@ -142,7 +145,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
       expectedMainRevision: z.number().int().min(0).optional(),
     },
     outputSchema: contextOutputSchema,
-  }, tool((args: { sourceBranchId?: string; targetBranchId: string; commitIds: string[]; expectedRevision: number; expectedMainRevision?: number }) =>
+  }, boundTool((args: { sourceBranchId?: string; targetBranchId: string; commitIds: string[]; expectedRevision: number; expectedMainRevision?: number }) =>
     service.createMerge(args.sourceBranchId ?? session.branchId, args.targetBranchId, args.commitIds, args.expectedRevision, args.expectedMainRevision)));
 
   server.registerTool('review_status', {
@@ -150,7 +153,7 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     description: 'Read the review state for a context merge request.',
     inputSchema: { reviewId: z.string().min(1) },
     outputSchema: contextOutputSchema,
-  }, tool(({ reviewId }: { reviewId: string }) => service.review(reviewId)));
+  }, boundTool(({ reviewId }: { reviewId: string }) => service.review(reviewId)));
 
   return server;
 }
