@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx packages/core/src/core.test.ts"
+    "test": "node --import tsx --test packages/core/src/core.test.ts packages/adapters/src/review-regressions.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
