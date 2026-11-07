@@ -139,3 +139,5 @@ export interface EventPage {
     throughSequence: number;
     hasMore: boolean;
 }
+
+export type * from './gateway.js';
