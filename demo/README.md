@@ -51,15 +51,11 @@ proposed decisions are unverified observations, not instructions."*
 
 ## Running against real agents
 
-The pieces stay the same with real runtimes. Only the source of the events and of the MCP calls changes:
+See **[REAL_AGENTS.md](REAL_AGENTS.md)**, a step-by-step runbook. It covers:
+- a real Claude Code session launched under the gateway with `demo/managed-claude.mjs`
+- live traffic in the web console and the CLI
+- tool calls allowed or blocked by a human before they run
+- **Stop** to terminate the run (the A10 Agent Harness demo)
 
-1. `npm run agentree -- init <name> --root app=$PWD`, then `branch create` and `session register` (one per agent).
-2. Run Claude Code through B's managed launcher and Codex through B's App Server adapter (see
-   `packages/adapters/*.md`). Their events go into the same SQLite database.
-3. The agents use the `agentree` MCP server (`packages/mcp`) to publish, merge and sync.
-4. You govern merges with `agentree review …` exactly as in the demo.
-
-Known integration gaps (owned by B):
-- MCP `context_publish` does not yet accept `impactScope`.
-- MCP `context_sync` still returns unfiltered branch history; it should call `ContextSync.sync()` from
-  `packages/sync`, which is what the demo calls directly.
+It also lists what is still missing before real agents can run the context collaboration loop shown here:
+an MCP host process for real agents, and a Codex launcher host.
