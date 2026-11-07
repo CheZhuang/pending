@@ -49,6 +49,8 @@ export interface AgentAdapter {
   discoverSessions(): Promise<NativeSession[]>;
   readEvents(session: NativeSession, cursor?: AdapterCursor): Promise<NativeEventBatch>;
   normalize(record: NativeRecord, binding: SessionBinding): NormalizedEvent;
+  /** Optional acknowledgement after its cursor is durably saved. */
+  acknowledge?(cursor: AdapterCursor): Promise<void> | void;
   close(): Promise<void>;
 }
 
@@ -61,6 +63,42 @@ export interface CursorStore {
 /** Minimal ingestion seam so adapters can use a mock before daemon transport exists. */
 export interface EventIngestClient {
   ingest(event: NormalizedEvent): Promise<boolean> | boolean;
+}
+
+/** Mirrors the core's administrative session-registration method. */
+export interface SessionRegistrar {
+  registerSession(
+    branchId: string,
+    agent: { id: string; name: string },
+    runtime: string,
+    nativeId: string,
+  ): Promise<{ id: string; workspaceId: string; branchId: string; nativeId: string; runtime: string }> |
+    { id: string; workspaceId: string; branchId: string; nativeId: string; runtime: string };
+}
+
+/** Register a native session through the trusted service and bind its returned identity. */
+export async function registerNativeSession(
+  registrar: SessionRegistrar,
+  agent: { id: string; name: string },
+  branchId: string,
+  native: NativeSession,
+): Promise<SessionBinding> {
+  const registered = await registrar.registerSession(branchId, agent, native.runtime, native.nativeId);
+  if (registered.branchId !== branchId || registered.nativeId !== native.nativeId || registered.runtime !== native.runtime) {
+    throw new Error('Session registrar returned a mismatched native session binding');
+  }
+  return { ...native, ...registered };
+}
+
+export async function registerAdapterSession(
+  adapter: AgentAdapter,
+  registrar: SessionRegistrar,
+  agent: { id: string; name: string },
+  branchId: string,
+): Promise<SessionBinding> {
+  const sessions = await adapter.discoverSessions();
+  if (sessions.length !== 1) throw new Error(`Expected one managed native session, received ${sessions.length}`);
+  return registerNativeSession(registrar, agent, branchId, sessions[0]!);
 }
 
 export function cursorKey(binding: SessionBinding): string {
@@ -84,5 +122,10 @@ export async function ingestNextBatch(
     await client.ingest(adapter.normalize(record, binding));
   }
   await cursorStore.set(key, batch.nextCursor);
+  await adapter.acknowledge?.(batch.nextCursor);
   return batch;
 }
+
+export { MockAgentAdapter, MockGatewayClient, MemoryCursorStore, mockCapabilities } from './mock.js';
+export { SqliteCursorStore, type GenericEntityStore } from './sqlite-cursor-store.js';
+export { CodexAppServerAdapter, type CodexAppServerOptions } from './codex-app-server.js';
