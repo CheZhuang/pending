@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { createGateway } from './gateway.js';
 
-const directory = process.env.GATEWAY_DATA_DIR ?? '.agentree';
+const directory = process.env.GATEWAY_DATA_DIR ?? join(homedir(), '.local', 'share', 'agentree');
 mkdirSync(directory, {recursive:true, mode:0o700});
 const tokenPath = join(directory,'admin-token');
 let adminToken = process.env.HARNESS_ADMIN_TOKEN;

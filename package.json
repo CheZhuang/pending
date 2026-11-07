@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts"
+    "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts packages/adapters/src/*.test.ts src/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
