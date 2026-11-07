@@ -87,7 +87,14 @@ export async function registerNativeSession(
   if (registered.branchId !== branchId || registered.nativeId !== native.nativeId || registered.runtime !== native.runtime) {
     throw new Error('Session registrar returned a mismatched native session binding');
   }
-  return { ...native, ...registered };
+  return {
+    ...native,
+    sessionId: registered.id,
+    workspaceId: registered.workspaceId,
+    branchId: registered.branchId,
+    runtime: registered.runtime,
+    nativeId: registered.nativeId,
+  };
 }
 
 export async function registerAdapterSession(
@@ -129,3 +136,6 @@ export async function ingestNextBatch(
 export { MockAgentAdapter, MockGatewayClient, MemoryCursorStore, mockCapabilities } from './mock.js';
 export { SqliteCursorStore, type GenericEntityStore } from './sqlite-cursor-store.js';
 export { CodexAppServerAdapter, type CodexAppServerOptions } from './codex-app-server.js';
+export { handleClaudePreToolHook, createClaudeDecideClient, type ClaudeDecideRequest, type ClaudeHookEnvironment } from './claude-pre-tool-hook.js';
+export { createClaudeHookSettings, type ClaudeSettings } from './claude-settings.js';
+export { HttpManagedClaudeGateway, runManagedClaude, type ClaudeLaunchOptions, type ManagedClaudeGateway, type ManagedClaudeEvent, type ManagedClaudeSession } from './claude-launcher.js';
