@@ -68,9 +68,17 @@ export function eventSummary(e: SequencedEvent): string {
     case 'workspace.created':
       return `workspace ${str(p.name)} (${short(str(p.id))})`;
     default: {
-      const input = rec(p.tool_input);
-      const target = str(input.file_path) || str(input.command) || str(input.path);
-      if (str(p.tool_name)) return `${str(p.tool_name)} ${clip(target, 70)}`.trim();
+      // Claude hooks use tool_name/tool_input; B's adapter records use tool/input.
+      const tool = str(p.tool_name) || str(p.tool);
+      const input = rec(p.tool_input ?? p.input);
+      const target = str(input.file_path) || str(input.command) || str(input.path) || str(input.pattern) || str(p.command);
+      if (tool) return `${tool} ${clip(target, 70)}`.trim();
+      // Codex App Server notifications: { method, params: { item } }.
+      const item = rec(rec(p.params).item);
+      if (Array.isArray(item.changes)) return `${str(item.type) || 'change'} ${item.changes.map((c) => str(rec(c).path)).join(', ')}`;
+      if (str(item.command)) return `${str(item.type) || 'command'} $ ${clip(str(item.command), 60)}`;
+      if (str(p.method)) return str(p.method);
+      if (str(p.text)) return `"${clip(str(p.text), 70)}"`;
       return clip(JSON.stringify(e.payload ?? null), 80);
     }
   }

@@ -95,3 +95,9 @@ in the user's application data directory. See `packages/core/README.md` for the
 trusted identity boundary, controlled operations, observed events, and review
 semantics. This foundation does not wire the placeholder HTTP server to an
 unauthenticated agent endpoint.
+
+## Scoped sync, CLI and demo (Task C)
+
+- `packages/sync`: scope relevance, inferred agent focus, and incremental context delivery (see its README).
+- `apps/cli`: the human-facing `agentree` CLI: `npm run agentree -- --help`.
+- `demo/`: a reproducible two-agent run of the full loop: `npm run demo` (see `demo/README.md`).

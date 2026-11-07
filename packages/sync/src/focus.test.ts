@@ -39,6 +39,17 @@ test('touches are extracted from Claude Code, Codex and explicit adapter payload
   assert.deepEqual(extractTouches(ev('s', { tool_input: { path: '/repo/e.ts' } }, 'file.write'), roots), [{ rootId: 'app', path: 'e.ts', access: 'write' }]);
 });
 
+test("touches are extracted from B's adapter record shapes", () => {
+  // packages/adapters fixtures / MockAgentAdapter: { tool, input }
+  assert.deepEqual(extractTouches(ev('s', { tool: 'Read', input: { file_path: 'src/x.ts' } }, 'tool.call'), [roots[0]]), [{ rootId: 'app', path: 'src/x.ts', access: 'read' }]);
+  assert.deepEqual(extractTouches(ev('s', { tool: 'shell', command: 'cat src/x.ts' }, 'tool.call'), roots), []);
+  // CodexAppServerAdapter: { method, params: { item: { type: 'fileChange', changes } } }
+  const codex = ev('s', { method: 'item/completed', params: { item: { type: 'fileChange', changes: [{ path: '/repo/src/api/users.ts', kind: 'update' }] } } }, 'item/completed');
+  assert.deepEqual(extractTouches(codex, roots), [{ rootId: 'app', path: 'src/api/users.ts', access: 'write' }]);
+  const relative = ev('s', { method: 'item/completed', params: { cwd: '/repo', item: { changes: [{ path: 'src/b.ts' }] } } }, 'item/completed');
+  assert.deepEqual(extractTouches(relative, roots), [{ rootId: 'app', path: 'src/b.ts', access: 'write' }]);
+});
+
 test('focus prefers recent and modified files, and ignores other sessions', () => {
   const events = [
     claude('alice', 'Read', '/repo/src/old.ts'),
