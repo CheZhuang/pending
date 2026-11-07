@@ -71,3 +71,10 @@ test('a session without focus still receives workspace-wide knowledge only', () 
   const rootOnly = focusOn(folder('.'));
   assert.equal(relevance(finding(file('anything.ts')), rootOnly)?.match, 'descendant');
 });
+
+test('an inferred root association only matches root-wide knowledge', () => {
+  const touchedRoot: Focus = { sessionId: 's', entries: [{ scope: folder('.'), source: 'root', weight: 0.2 }] };
+  assert.equal(relevance(finding(file('src/x.ts')), touchedRoot), undefined);
+  assert.equal(relevance(finding(folder('.')), touchedRoot)?.match, 'exact');
+  assert.equal(relevance(finding(folder('.', 'other')), touchedRoot), undefined);
+});

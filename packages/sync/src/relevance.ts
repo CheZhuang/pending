@@ -67,6 +67,8 @@ export function relevance(knowledge: Knowledge, focus: Focus): Relevance | undef
     for (const entry of focus.entries) {
       const match = matchScope(scope, entry.scope);
       if (!match) continue;
+      // Touching a root only makes root-wide knowledge relevant, not everything inside it.
+      if (entry.source === 'root' && match !== 'exact' && match !== 'workspace') continue;
       const score = round(MATCH_STRENGTH[match] * entry.weight);
       if (!best || score > best.score) best = { score, via, match, focus: entry };
     }
