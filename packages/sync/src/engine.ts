@@ -206,21 +206,44 @@ export class ContextSync {
     const best = new Map<string, Candidate>();
     const unrelated = new Set<string>();
 
+    // Collect every visible commit first, so "decisions this session authored" is known up front.
+    const seen: Array<{ commit: ContextCommit; seenOn: string; authority: Authority }> = [];
+    const main = this.reader.snapshot(mainId);
+    const inForce = new Set(main.knowledge.map((c) => c.id));
+    for (const entry of main.entries) seen.push({ commit: entry.commit, seenOn: mainId, authority: authorityOf(entry.commit, true, inForce.has(entry.commit.id)) });
+    for (const branchId of branchIds) {
+      if (branchId === mainId) continue;
+      for (const entry of this.reader.snapshot(branchId).entries) {
+        // Inherited main entries were handled above; only local drafts here.
+        if (entry.branchId === branchId) seen.push({ commit: entry.commit, seenOn: branchId, authority: authorityOf(entry.commit, false) });
+      }
+    }
+    const isOwn = (c: ContextCommit) => c.provenance.sessionId === session.id;
+    // A replacement inherits how relevant the session's own decision with that key was.
+    const ownDecisionScore = new Map<string, number>();
+    for (const { commit } of seen) {
+      if (!isOwn(commit) || commit.knowledge.kind !== 'decision') continue;
+      const score = relevance(commit.knowledge, focus)?.score ?? 0.5;
+      ownDecisionScore.set(commit.knowledge.key, Math.max(score, ownDecisionScore.get(commit.knowledge.key) ?? 0));
+    }
+    const followUp = { via: 'location', match: 'follow-up' } as const;
+
     const consider = (commit: ContextCommit, seenOn: string, authority: Authority) => {
-      const own = commit.provenance.sessionId === session.id;
+      const own = isOwn(commit);
       // Own drafts are not news; own work becoming accepted or superseded is.
       if (own && !isAccepted(authority) && authority !== 'superseded-decision') return;
       const itemId = `${commit.id}:${authority}`;
       let match: Candidate['relevance'] | undefined = relevance(commit.knowledge, focus);
       if (authority === 'superseded-decision') {
-        // Only tell sessions that were previously told the decision was accepted.
+        // Tell the author, and sessions that were previously told the decision was accepted.
         const prior = ledger.items[`${commit.id}:accepted-decision`];
-        if (!prior || prior.state === 'pending') return;
-        match = match ?? { score: prior.score, via: 'location', match: 'follow-up' };
+        if (!own && (!prior || prior.state === 'pending')) return;
+        match = match ?? { ...followUp, score: prior?.score ?? ownDecisionScore.get(commit.knowledge.key) ?? 0.5 };
       } else if (!match && (authority === 'accepted-decision' || authority === 'proposed-decision')) {
-        // Competing proposals and replacements for a decision this session knows are relevant to it.
+        // Competing proposals and replacements for a decision this session knows or wrote are relevant to it.
         const known = Object.values(ledger.items).find((r) => r.authority === 'accepted-decision' && r.key === commit.knowledge.key && r.state !== 'pending');
-        if (known) match = { score: known.score, via: 'location', match: 'follow-up' };
+        if (known) match = { ...followUp, score: known.score };
+        else if (ownDecisionScore.has(commit.knowledge.key)) match = { ...followUp, score: ownDecisionScore.get(commit.knowledge.key)! };
       }
       if (!match) { unrelated.add(commit.id); return; }
       const candidate: Candidate = { itemId, commit, seenOn, authority, relevance: match, priority: round(match.score * AUTHORITY_WEIGHT[authority]) };
@@ -228,16 +251,7 @@ export class ContextSync {
       if (!previous || AUTHORITY_RANK[authority] > AUTHORITY_RANK[previous.authority]) best.set(commit.id, candidate);
     };
 
-    const main = this.reader.snapshot(mainId);
-    const inForce = new Set(main.knowledge.map((c) => c.id));
-    for (const entry of main.entries) consider(entry.commit, mainId, authorityOf(entry.commit, true, inForce.has(entry.commit.id)));
-    for (const branchId of branchIds) {
-      if (branchId === mainId) continue;
-      for (const entry of this.reader.snapshot(branchId).entries) {
-        // Inherited main entries were handled above; only local drafts here.
-        if (entry.branchId === branchId) consider(entry.commit, branchId, authorityOf(entry.commit, false));
-      }
-    }
+    for (const s of seen) consider(s.commit, s.seenOn, s.authority);
 
     const candidates = new Map([...best.values()].map((c) => [c.itemId, c]));
     const filtered = [...unrelated].filter((id) => !best.has(id)).length;
