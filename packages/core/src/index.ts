@@ -22,20 +22,20 @@ const integer = (n: number) => Number.isSafeInteger(n) && n >= 0;
 export class AgentreeService {
     constructor(readonly store: SqliteStore, private readonly actor: Actor) {}
 
-    private get<T>(key: string): T {
-        const value = this.store.get<T>(key);
+    private get<T>(key: string, kind: string): T {
+        const value = this.store.get<T>(key,kind);
         if (!value) throw new DomainError('NOT_FOUND', key);
         return value;
     }
     private session(): Session {
         if (this.actor.type !== 'agent') throw new DomainError('IDENTITY', 'Agent required');
-        return this.get<Session>(this.actor.sessionId);
+        return this.get<Session>(this.actor.sessionId,'session');
     }
     private audit(type: string, payload: unknown, workspaceId = 'gateway') {
         this.store.appendEvent({ id: id(), workspaceId, source: 'gateway', nativeId: id(), type, mode: 'controlled', payload, occurredAt: new Date().toISOString() });
     }
     authorize(operation: Operation, branchId?: string, workspaceId?: string): PolicyDecision {
-        const branch = branchId ? this.get<Branch>(branchId) : undefined;
+        const branch = branchId ? this.get<Branch>(branchId,'branch') : undefined;
         let outcome: PolicyDecision['outcome'] = 'allow', reason = 'Authorized';
         if (this.actor.type === 'agent') {
             const session = this.session();
@@ -81,7 +81,7 @@ export class AgentreeService {
     }
     createBranch(workspaceId: string, name: string, restricted = false): Branch {
         this.guard('branch.create', undefined, false, workspaceId);
-        this.get<Workspace>(workspaceId);
+        this.get<Workspace>(workspaceId,'workspace');
         if (!name.trim() || name === 'main') throw new DomainError('BRANCH', 'Branch name is empty or reserved');
         const b: Branch = { id: id(), workspaceId, name, restricted, revision: 0 };
         this.store.transaction(() => {
@@ -93,8 +93,8 @@ export class AgentreeService {
     registerSession(branchId: string, agent: {id: string; name: string}, runtime: string, nativeId: string): Session {
         this.guard('session.register', branchId);
         return this.store.transaction(() => {
-            const b = this.get<Branch>(branchId);
-            if (this.get<Workspace>(b.workspaceId).mainBranchId === b.id)
+            const b = this.get<Branch>(branchId,'branch');
+            if (this.get<Workspace>(b.workspaceId,'workspace').mainBranchId === b.id)
                 throw new DomainError('BRANCH', 'Publish drafts on an agent branch; main accepts reviewed merges');
             const row = this.store.db.prepare(`SELECT data FROM entities WHERE kind='session' AND workspace_ref=?
                 AND json_extract(data,'$.runtime')=? AND json_extract(data,'$.nativeId')=?`).get(b.workspaceId,runtime,nativeId) as {data:string}|undefined;
@@ -104,16 +104,16 @@ export class AgentreeService {
                 return prior;
             }
             const s: Session = { id: id(), agentId: agent.id, workspaceId: b.workspaceId, branchId, runtime, nativeId };
-            if (!this.store.get(agent.id)) this.store.insert(agent.id, 'agent', agent);
+            if (!this.store.get(agent.id,'agent')) this.store.insert(agent.id, 'agent', agent);
             this.store.insert(s.id, 'session', s);
             this.audit('session.registered', s, b.workspaceId);
             return s;
         });
     }
     ingest(event: NormalizedEvent): boolean {
-        const s = event.sessionId ? this.get<Session>(event.sessionId) : undefined;
+        const s = event.sessionId ? this.get<Session>(event.sessionId,'session') : undefined;
         this.guard('event.ingest', s?.branchId, false, event.workspaceId);
-        this.get<Workspace>(event.workspaceId);
+        this.get<Workspace>(event.workspaceId,'workspace');
         if (event.mode !== 'observed' || event.source === 'gateway'
             || (this.actor.type === 'agent' && (!s || s.id !== this.session().id))
             || (s && s.workspaceId !== event.workspaceId)) throw new DomainError('EVENT', 'Invalid observed event identity');
@@ -121,7 +121,7 @@ export class AgentreeService {
     }
     events(workspaceId: string, query: EventQuery = {}): EventPage {
         this.guard('context.read', undefined, false, workspaceId);
-        this.get<Workspace>(workspaceId);
+        this.get<Workspace>(workspaceId,'workspace');
         if (!integer(query.afterSequence ?? 0) || (query.throughSequence !== undefined && !integer(query.throughSequence))
             || !integer(query.limit ?? 100) || (query.limit ?? 100) < 1 || (query.limit ?? 100) > 1000
             || (query.throughSequence !== undefined && query.throughSequence < (query.afterSequence ?? 0)))
@@ -133,7 +133,7 @@ export class AgentreeService {
         const parsed = knowledgeSchema.parse(knowledge);
         const s = this.session();
         return this.store.transaction(() => {
-            const b = this.get<Branch>(branchId), w = this.get<Workspace>(b.workspaceId);
+            const b = this.get<Branch>(branchId,'branch'), w = this.get<Workspace>(b.workspaceId,'workspace');
             if (b.id === w.mainBranchId) throw new DomainError('AUTHORITATIVE', 'Main accepts reviewed merges only');
             const token = this.revision(b);
             if (expected) this.assertRevision(token,expected);
@@ -158,8 +158,8 @@ export class AgentreeService {
         });
     }
     private revision(b: Branch): ContextRevision {
-        const w = this.get<Workspace>(b.workspaceId);
-        return {branchRevision:b.revision, mainRevision:this.get<Branch>(w.mainBranchId).revision};
+        const w = this.get<Workspace>(b.workspaceId,'workspace');
+        return {branchRevision:b.revision, mainRevision:this.get<Branch>(w.mainBranchId,'branch').revision};
     }
     private assertRevision(actual: ContextRevision, expected: ContextRevision) {
         if (actual.branchRevision !== expected.branchRevision || actual.mainRevision !== expected.mainRevision)
@@ -172,7 +172,7 @@ export class AgentreeService {
         return rows.map(row => ({commit:JSON.parse(row.data) as ContextCommit, branchId, revision:row.revision}));
     }
     private effective(b: Branch, token: ContextRevision): ContextCommit[] {
-        const mainId = this.get<Workspace>(b.workspaceId).mainBranchId;
+        const mainId = this.get<Workspace>(b.workspaceId,'workspace').mainBranchId;
         const main = this.store.decisions<ContextCommit>(mainId,token.mainRevision);
         if (b.id === mainId) return main;
         const local = this.store.decisions<ContextCommit>(b.id,token.branchRevision);
@@ -180,7 +180,7 @@ export class AgentreeService {
     }
     workspace(workspaceId: string): Workspace {
         this.guard('context.read',undefined,false,workspaceId);
-        return this.get<Workspace>(workspaceId);
+        return this.get<Workspace>(workspaceId,'workspace');
     }
     branches(workspaceId: string): Branch[] {
         this.workspace(workspaceId);
@@ -190,14 +190,14 @@ export class AgentreeService {
     /** Cheap change detection for sync consumers; no context history is loaded. */
     contextRevision(branchId: string): ContextRevision {
         this.guard('context.read',branchId);
-        return this.store.transaction(() => this.revision(this.get<Branch>(branchId)),false);
+        return this.store.transaction(() => this.revision(this.get<Branch>(branchId,'branch')),false);
     }
     /** Main is live by default; supplying a revision reconstructs the same immutable view. */
     snapshot(branchId: string, revision?: ContextRevision): ContextSnapshot {
         this.guard('context.read',branchId);
         return this.store.transaction(() => {
-            const b = this.get<Branch>(branchId), current = this.revision(b), token = revision ?? current;
-            const mainId = this.get<Workspace>(b.workspaceId).mainBranchId;
+            const b = this.get<Branch>(branchId,'branch'), current = this.revision(b), token = revision ?? current;
+            const mainId = this.get<Workspace>(b.workspaceId,'workspace').mainBranchId;
             if (!integer(token.branchRevision) || !integer(token.mainRevision)
                 || token.branchRevision > current.branchRevision || token.mainRevision > current.mainRevision
                 || (b.id === mainId && token.branchRevision !== token.mainRevision))
@@ -223,18 +223,18 @@ export class AgentreeService {
         this.guard('merge.create',targetBranchId);
         this.guard('context.read',sourceBranchId);
         return this.store.transaction(() => {
-            const source = this.get<Branch>(sourceBranchId), target = this.get<Branch>(targetBranchId);
+            const source = this.get<Branch>(sourceBranchId,'branch'), target = this.get<Branch>(targetBranchId,'branch');
             if (source.workspaceId !== target.workspaceId || source.id === target.id || !commitIds.length || new Set(commitIds).size !== commitIds.length)
                 throw new DomainError('MERGE','Invalid merge');
             const token = this.revision(target);
             this.assertRevision(token,{branchRevision:expectedRevision,mainRevision:expectedMainRevision ?? token.mainRevision});
-            const mainId = this.get<Workspace>(source.workspaceId).mainBranchId;
+            const mainId = this.get<Workspace>(source.workspaceId,'workspace').mainBranchId;
             for (const cid of commitIds) {
                 if (!this.hasCommit(source.id,cid) && !this.hasCommit(mainId,cid)) throw new DomainError('MERGE','Commit absent from source');
                 if (this.hasCommit(target.id,cid) || (target.id !== mainId && this.hasCommit(mainId,cid)))
                     throw new DomainError('MERGE','Commit already visible in target');
             }
-            const incoming = commitIds.map(cid => this.get<ContextCommit>(cid));
+            const incoming = commitIds.map(cid => this.get<ContextCommit>(cid,'commit'));
             const decisions = incoming.filter(c => c.knowledge.kind === 'decision');
             if (decisions.some((c,i) => decisions.slice(i+1).some(other => identity(c) === identity(other) || overlaps(c,other))))
                 throw new DomainError('MERGE','Overlapping incoming decisions must be reviewed separately');
@@ -254,24 +254,24 @@ export class AgentreeService {
         });
     }
     applyMerge(mergeId: string): MergeRequest {
-        const initial = this.get<MergeRequest>(mergeId);
-        const review = initial.reviewId ? this.get<Review>(initial.reviewId) : undefined;
+        const initial = this.get<MergeRequest>(mergeId,'merge');
+        const review = initial.reviewId ? this.get<Review>(initial.reviewId,'review') : undefined;
         this.guard('merge.apply',initial.targetBranchId,review?.state === 'approved');
         return this.store.transaction(() => {
-            const m = this.get<MergeRequest>(mergeId), b = this.get<Branch>(m.targetBranchId);
+            const m = this.get<MergeRequest>(mergeId,'merge'), b = this.get<Branch>(m.targetBranchId,'branch');
             if (m.state !== 'pending') throw new DomainError('STATE','Merge is not pending');
             this.assertRevision(this.revision(b),{branchRevision:m.expectedRevision,mainRevision:m.expectedMainRevision});
-            const r = m.reviewId ? this.get<Review>(m.reviewId) : undefined;
+            const r = m.reviewId ? this.get<Review>(m.reviewId,'review') : undefined;
             if (r && r.state !== 'approved') throw new DomainError('REVIEW','Approval required');
             const active = this.store.decisions<ContextCommit>(b.id,b.revision);
             for (const cid of m.commitIds) {
-                const c = this.get<ContextCommit>(cid);
+                const c = this.get<ContextCommit>(cid,'commit');
                 this.attach(b,cid);
                 if (c.knowledge.kind !== 'decision') continue;
                 const rejected = r?.resolutions?.some(choice => choice.incomingCommitId === cid && choice.selectedCommitId !== cid);
                 if (rejected) continue;
                 // Materialized decision choices are append-only; history keeps every proposal.
-                for (const old of active.filter(old => overlaps(old,c) && identity(old) !== identity(c)))
+                for (const old of active.filter(old => overlaps(old,c) && old.knowledge.body !== c.knowledge.body && identity(old) !== identity(c)))
                     this.store.recordDecision(b.id,b.revision,identity(old),null);
                 this.store.recordDecision(b.id,b.revision,identity(c),cid);
             }
@@ -283,17 +283,17 @@ export class AgentreeService {
         });
     }
     review(reviewId: string): Review {
-        const r = this.get<Review>(reviewId), m = this.get<MergeRequest>(r.mergeId);
+        const r = this.get<Review>(reviewId,'review'), m = this.get<MergeRequest>(r.mergeId,'merge');
         this.guard('review.read',m.targetBranchId);
         return r;
     }
     resolveReview(reviewId: string, decision: 'approved' | 'rejected', resolutions?: ConflictResolution[]): Review {
-        const initial = this.get<Review>(reviewId), merge = this.get<MergeRequest>(initial.mergeId);
+        const initial = this.get<Review>(reviewId,'review'), merge = this.get<MergeRequest>(initial.mergeId,'merge');
         this.guard('review.resolve',merge.targetBranchId);
         return this.store.transaction(() => {
-            const r = this.get<Review>(reviewId), m = this.get<MergeRequest>(r.mergeId);
+            const r = this.get<Review>(reviewId,'review'), m = this.get<MergeRequest>(r.mergeId,'merge');
             if (r.state !== 'pending' || m.state !== 'pending') throw new DomainError('STATE','Review already decided');
-            this.assertRevision(this.revision(this.get<Branch>(m.targetBranchId)),{branchRevision:m.expectedRevision,mainRevision:m.expectedMainRevision});
+            this.assertRevision(this.revision(this.get<Branch>(m.targetBranchId,'branch')),{branchRevision:m.expectedRevision,mainRevision:m.expectedMainRevision});
             if (resolutions !== undefined) {
                 if (decision !== 'approved' || resolutions.length !== r.conflicts.length
                     || new Set(resolutions.map(c => JSON.stringify([c.existingCommitId,c.incomingCommitId]))).size !== resolutions.length
@@ -305,6 +305,11 @@ export class AgentreeService {
                     const choices = resolutions.filter(c => c.incomingCommitId === cid);
                     if (choices.some(c => c.selectedCommitId === cid) && choices.some(c => c.selectedCommitId !== cid))
                         throw new DomainError('RESOLUTION','Overlapping conflicts must agree on whether to accept the incoming decision');
+                }
+                for (const existingId of new Set(resolutions.map(c => c.existingCommitId))) {
+                    const choices = resolutions.filter(c => c.existingCommitId === existingId);
+                    if (choices.some(c => c.selectedCommitId === existingId) && choices.some(c => c.selectedCommitId !== existingId))
+                        throw new DomainError('RESOLUTION','An existing decision cannot be both retained and superseded');
                 }
             }
             r.state = decision;
@@ -321,7 +326,7 @@ export class AgentreeService {
     executeControlled<T>(branchId: string, action: () => T): T {
         this.guard('controlled.execute',branchId);
         const result = action();
-        this.audit('controlled.executed',{branchId,actor:this.actor},this.get<Branch>(branchId).workspaceId);
+        this.audit('controlled.executed',{branchId,actor:this.actor},this.get<Branch>(branchId,'branch').workspaceId);
         return result;
     }
 }
