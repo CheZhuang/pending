@@ -283,7 +283,8 @@ export class CodexAppServerAdapter implements AgentAdapter {
       nativeId: `codex:${this.nativeId}:event:${randomUUID()}`,
       type: notification.method,
       occurredAt: timestamp,
-      payload: { method: notification.method, params },
+      // Preserve the native envelope and expose file-change fields understood by sync.
+      payload: { method: notification.method, params, item: row.item, cwd: row.cwd ?? this.options.cwd },
     };
     // Journal before exposing the observation so a failed cursor save can replay it.
     this.journal.save(this.sequence, [...this.history, record]);

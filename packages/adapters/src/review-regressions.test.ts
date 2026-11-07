@@ -9,6 +9,7 @@ import { MockGatewayClient } from './mock.js';
 import { SqliteStore } from '../../storage/src/index.js';
 import { AgentreeService } from '../../core/src/index.js';
 import { createAgentreeMcpServer } from '../../mcp/src/index.js';
+import { extractTouches, MemoryLedger } from '../../sync/src/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -25,14 +26,14 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
  if(m.method==='turn/start'){
    turn=m.id;send({id:turn,method:'item/commandExecution/requestApproval',params:{threadId:'thread-demo'}});return;
  }
- if(m.method==='thread/start'||m.method==='thread/resume')send({method:'item/completed',params:{threadId:'thread-demo',item:{id:process.argv[2]}}});
+ if(m.method==='thread/start'||m.method==='thread/resume')send({method:'item/completed',params:{threadId:'thread-demo',item:{id:process.argv[2],changes:[{path:'src/a.ts'}]}}});
  send({id:m.id,result:m.method==='thread/start'?{thread:{id:'thread-demo'}}:{}});
 });`;
 
 async function fixture() {
  const dir=await mkdtemp(join(tmpdir(),'agentree-regression-'));
  const script=join(dir,'rpc.cjs');await writeFile(script,fakeRpc);
- return {dir, options:(marker:string)=>({command:process.execPath,args:[script,marker],journalPath:join(dir,'journal.json')})};
+ return {dir, options:(marker:string)=>({command:process.execPath,cwd:dir,args:[script,marker],journalPath:join(dir,'journal.json')})};
 }
 
 test('Codex answers a server request even when its ID matches a client request', async()=>{
@@ -51,6 +52,7 @@ test('uncheckpointed observations replay with their original IDs after restart',
   const binding={...(await adapter.discoverSessions())[0]!,sessionId:'s',workspaceId:'w',branchId:'b'};
   const first=await adapter.readEvents(binding);
   assert.equal(first.records.length,1);
+  assert.deepEqual(extractTouches(adapter.normalize(first.records[0]!,binding),[{id:'root',path:f.dir}]), [{rootId:'root',path:'src/a.ts',access:'write'}]);
   await gateway.ingest(adapter.normalize(first.records[0]!,binding));
   // Model a crash after ingestion but before the cursor is saved.
   await adapter.close();
@@ -84,7 +86,7 @@ test('source Claude launcher executes its hook from an unrelated project directo
  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test('MCP sync returns merged commits using target branch revisions',async()=>{
+test('MCP sync delivers merged context from a peer branch',async()=>{
  const store=new SqliteStore(':memory:');
  const admin=new AgentreeService(store,{type:'human',id:'reviewer'});
  const w=admin.createWorkspace('review');const target=admin.createBranch(w.id,'target');const source=admin.createBranch(w.id,'source');
@@ -93,12 +95,13 @@ test('MCP sync returns merged commits using target branch revisions',async()=>{
  for(let i=0;i<2;i++)t.publish(target.id,{kind:'finding',key:'t'+i,body:'target',scope:{type:'workspace'}});
  const incoming=s.publish(source.id,{kind:'finding',key:'incoming',body:'merged',scope:{type:'workspace'}});
  admin.applyMerge(admin.createMerge(source.id,target.id,[incoming.id],2).id);
- const server=createAgentreeMcpServer({session:ts,service:t});const client=new Client({name:'regression',version:'1'});
+ const server=createAgentreeMcpServer({session:ts,service:t,ledger:new MemoryLedger()});const client=new Client({name:'regression',version:'1'});
  const [ct,st]=InMemoryTransport.createLinkedPair();
  try {
   await server.connect(st);await client.connect(ct);
-  const result=await client.callTool({name:'context_sync',arguments:{afterRevision:2}});
-  const data=(result.structuredContent as {data:{currentRevision:number;commits:{id:string}[]}}).data;
-  assert.equal(data.currentRevision,3);assert.deepEqual(data.commits.map(c=>c.id),[incoming.id]);
+  await client.callTool({name:'context_subscribe',arguments:{scopes:[{type:'workspace'}]}});
+  const result=await client.callTool({name:'context_sync',arguments:{requestId:'merged-context'}});
+  const data=(result.structuredContent as {data:{items:{commitId:string}[]}}).data;
+  assert.deepEqual(data.items.map(c=>c.commitId),[incoming.id]);
  }finally{await client.close();await server.close();store.close();}
 });
