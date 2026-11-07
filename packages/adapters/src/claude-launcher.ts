@@ -8,6 +8,7 @@ import { createClaudeHookSettings } from './claude-settings.js';
 export interface ManagedClaudeSession {
   sessionId: string;
   afterSeq: number;
+  sessionToken?: string;
 }
 
 export interface ManagedClaudeEvent {
@@ -24,17 +25,26 @@ export interface ManagedClaudeGateway {
 
 /** REST bridge for the session/stream routes described by the shared gateway plan. */
 export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
-  constructor(private readonly baseUrl = 'http://localhost:8787') {}
+  private sessionToken?: string;
+
+  constructor(
+    private readonly baseUrl = 'http://localhost:8787',
+    private readonly adminToken = process.env.HARNESS_ADMIN_TOKEN,
+  ) {}
 
   async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
+      method: 'POST', headers: {
+        'content-type': 'application/json',
+        ...(this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {}),
+      }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`Gateway session registration failed with HTTP ${response.status}`);
-    const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number };
+    const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number; sessionToken?: string };
     const sessionId = data.sessionId ?? data.id;
     if (!sessionId) throw new Error('Gateway session registration returned no session id');
-    return { sessionId, afterSeq: data.seq ?? data.currentSeq ?? 0 };
+    this.sessionToken = data.sessionToken;
+    return { sessionId, afterSeq: data.seq ?? data.currentSeq ?? 0, ...(data.sessionToken ? { sessionToken: data.sessionToken } : {}) };
   }
 
   async *stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent> {
@@ -46,7 +56,10 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
     const connectTimer = setTimeout(() => connectAbort.abort(new Error('Gateway event stream connection timed out')), 30_000);
     let response: Response;
     try {
-      response = await fetch(url, { headers: { accept: 'text/event-stream, application/x-ndjson' }, signal: connectAbort.signal });
+      response = await fetch(url, { headers: {
+        accept: 'text/event-stream, application/x-ndjson',
+        ...(this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {}),
+      }, signal: connectAbort.signal });
     } catch (error) {
       clearTimeout(connectTimer);
       signal.removeEventListener('abort', relayAbort);
@@ -81,7 +94,11 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
   }
 
   async endSession(sessionId: string): Promise<void> {
-    const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/end`, this.baseUrl), { method: 'POST', signal: AbortSignal.timeout(5_000) });
+    const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/end`, this.baseUrl), {
+      method: 'POST',
+      headers: this.sessionToken ? { authorization: `Bearer ${this.sessionToken}` } : {},
+      signal: AbortSignal.timeout(5_000),
+    });
     if (!response.ok) throw new Error(`Gateway session end failed with HTTP ${response.status}`);
   }
 }
@@ -120,10 +137,12 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
 
     const claudeArgs = options.args ?? [];
     if (claudeArgs.includes('--settings')) throw new Error('Managed Claude owns --settings for its hook configuration');
+    const { HARNESS_ADMIN_TOKEN: _adminToken, HARNESS_SESSION_TOKEN: _priorSessionToken, ...childEnv } = process.env;
     child = spawn(options.command ?? 'claude', ['--settings', settingsPath, ...claudeArgs], {
       cwd,
       stdio: 'inherit',
-      env: { ...process.env, HARNESS_GATEWAY_URL: gatewayUrl, HARNESS_SESSION_ID: session.sessionId },
+      env: { ...childEnv, HARNESS_GATEWAY_URL: gatewayUrl, HARNESS_SESSION_ID: session.sessionId,
+        ...(session.sessionToken ? { HARNESS_SESSION_TOKEN: session.sessionToken } : {}) },
     });
     const managedChild = child;
     const killChild = () => {

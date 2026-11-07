@@ -27,11 +27,18 @@ export interface ClaudeDecideRequest {
 export type ClaudeHookEnvironment = Record<string, string | undefined>;
 export type ClaudeDecide = (request: ClaudeDecideRequest) => Promise<z.infer<typeof decideResponseSchema>>;
 
-export function createClaudeDecideClient(gatewayUrl: string, timeoutMs = 100_000): ClaudeDecide {
+export function createClaudeDecideClient(
+  gatewayUrl: string,
+  timeoutMs = 100_000,
+  sessionToken = process.env.HARNESS_SESSION_TOKEN,
+): ClaudeDecide {
   return async request => {
     const response = await fetch(new URL('/v1/decide', gatewayUrl), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        ...(sessionToken ? { authorization: `Bearer ${sessionToken}` } : {}),
+      },
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(timeoutMs),
     });

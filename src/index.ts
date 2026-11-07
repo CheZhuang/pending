@@ -1,12 +1,21 @@
-import { createServer } from 'node:http';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
+import { createGateway } from './gateway.js';
 
-const port = Number(process.env.PORT ?? 3000);
-
-const server = createServer((_request, response) => {
-  response.writeHead(200, { 'content-type': 'application/json' });
-  response.end(JSON.stringify({ name: 'Agentree API', status: 'ok' }));
-});
-
-server.listen(port, () => {
-  console.log(`Agentree API listening on http://localhost:${port}`);
-});
+const directory = process.env.GATEWAY_DATA_DIR ?? '.agentree';
+mkdirSync(directory, {recursive:true, mode:0o700});
+const tokenPath = join(directory,'admin-token');
+let adminToken = process.env.HARNESS_ADMIN_TOKEN;
+if (!adminToken) {
+  try { adminToken=readFileSync(tokenPath,'utf8').trim(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    adminToken=randomBytes(32).toString('hex');
+    writeFileSync(tokenPath,adminToken+'\n',{mode:0o600,flag:'wx'});
+  }
+}
+const gateway=createGateway({database:join(directory,'gateway.sqlite'),adminToken});
+const port=Number(process.env.PORT??8787);
+gateway.server.listen(port,'127.0.0.1',()=>console.log(`Gateway listening on http://127.0.0.1:${port}; admin credential: ${tokenPath}`));
+for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{void gateway.close();});
