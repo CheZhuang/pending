@@ -11,6 +11,7 @@
     "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {

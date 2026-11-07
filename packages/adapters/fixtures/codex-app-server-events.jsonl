@@ -1,0 +1,2 @@
+{"method":"item/agentMessage/delta","params":{"threadId":"codex-thread-demo","turnId":"turn-1","itemId":"message-1","delta":"Working on the requested change."}}
+{"method":"turn/completed","params":{"threadId":"codex-thread-demo","turn":{"id":"turn-1","status":"completed"}}}
