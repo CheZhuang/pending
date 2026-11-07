@@ -21,3 +21,39 @@ Relevance is not access: a high score never grants a read or write, and a
 relevant Finding is still only a Finding.
 
 Tests: `npx -y node@24 --import tsx --test packages/sync/src/*.test.ts`
+
+## Incremental delivery (`ContextSync`)
+
+```ts
+const sync = new ContextSync(agentService, new EntityLedger(store)); // agent-bound ApplicationService
+const delta = sync.sync({ session, level: 'digest', budgetTokens: 2000, requestId }); // pull (MVP default)
+sync.acknowledge(session.id, delta.items.map(i => i.itemId));        // explicit, never automatic
+sync.subscribe(session.id, { mode: 'extend', scopes: [{ type: 'folder', path: 'docs' }] });
+```
+
+- **Reads only through `ApplicationService`** (`workspace`, `branches`, `contextRevision`,
+  `snapshot`, `events`), so every read is authorized as the agent's own session.
+- **Candidates**: main entries are `accepted-finding` / `accepted-decision` (main only takes
+  human-reviewed merges), other branches' local drafts are `finding` / `proposed-decision`.
+  A previously delivered main decision that is no longer in force is sent once as
+  `superseded-decision`. Own drafts are never echoed back; own work becoming accepted is.
+- **Relevance**: location or impact scope must match the session focus. Exception
+  (`match: 'follow-up'`): proposals and replacements for a decision key this session was
+  already told about.
+- **Delivery states** per session and item (`commitId:authority`): `pending → delivered →
+  acknowledged`. An authority upgrade (finding → accepted) is a new item, so it is delivered
+  again; the same item is never delivered twice under normal operation.
+- **Idle polls are free**: a fingerprint of all branch revision tokens + focus scopes is
+  stored; if unchanged and nothing is pending, no snapshot is loaded.
+- **Levels**: `signal` (key, scope, authority), `digest` (+ body ≤ 280 chars, provenance),
+  `full` (+ full body, event ids, timestamps). Items are packed by priority
+  (relevance × authority weight); an item that doesn't fit is downgraded, otherwise
+  deferred (stays pending) to the next sync.
+- **Retry safety**: pull with the same `requestId` replays the stored response. Push mode
+  (`prepare` → adapter delivers → `commit(batchId)`, or `push(request, sink)`) only marks
+  items delivered after the adapter confirms.
+- **Resumed sessions**: the ledger is persisted in SQLite; `redeliverUnacknowledged: true`
+  re-sends delivered-but-unacknowledged items when a native session lost its context.
+
+Every package carries a `notice` saying the items are data with provenance, and that only
+`accepted-*` items were human-reviewed.
