@@ -39,7 +39,7 @@ POST {{baseUrl}}/v1/decide
 Authorization: Bearer {{sessionToken}}
 Content-Type: application/json
 
-{"sessionId":"{{sessionId}}","tool":"Bash","input":{"command":"echo fixture"},"nativeSessionId":"native-fixture","cwd":"/tmp/gateway-fixture"}
+{"sessionId":"{{sessionId}}","requestId":"fixture-tool-1","tool":"Bash","input":{"command":"echo fixture"},"nativeSessionId":"native-fixture","cwd":"/tmp/gateway-fixture"}
 
 ### Inspect pending approvals in another request/tab (admin)
 GET {{baseUrl}}/v1/approvals

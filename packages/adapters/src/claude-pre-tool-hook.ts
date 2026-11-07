@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 
@@ -7,6 +8,7 @@ const hookInputSchema = z.object({
   hook_event_name: z.literal('PreToolUse'),
   tool_name: z.string().min(1),
   tool_input: z.unknown(),
+  tool_use_id: z.string().min(1).optional(),
 });
 
 const decideResponseSchema = z.object({
@@ -17,6 +19,7 @@ const decideResponseSchema = z.object({
 }).refine(value => value.outcome !== undefined || value.decision !== undefined);
 
 export interface ClaudeDecideRequest {
+  requestId: string;
   sessionId: string;
   tool: string;
   input: unknown;
@@ -69,6 +72,7 @@ export async function handleClaudePreToolHook(
 
   try {
     const result = await decide({
+      requestId: nativeInput.tool_use_id ?? randomUUID(),
       sessionId: env.HARNESS_SESSION_ID,
       tool: nativeInput.tool_name,
       input: nativeInput.tool_input,

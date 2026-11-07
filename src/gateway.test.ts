@@ -45,7 +45,7 @@ test('Gateway credentials, approval enforcement, timeout, and SQLite recovery', 
   });
   assert.equal(gatewaySource.status, 400, 'clients cannot spoof reserved Gateway events');
 
-  const approvedRequest = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, tool: 'Read', input: { file_path: '/tmp/a' } });
+  const approvedRequest = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, requestId:'read-1', tool: 'Read', input: { file_path: '/tmp/a' } });
   const approved = await waitForPending(first.sessionId);
   assert.equal((await request(`/v1/approvals/${approved.id}`, adminToken, 'POST', { decision: 'approved' })).status, 200);
   const allowed = await approvedRequest;
@@ -67,7 +67,7 @@ test('Gateway credentials, approval enforcement, timeout, and SQLite recovery', 
   assert.equal(denied, true);
   assert.equal(sentinelCalls, 0, 'denied hook must prevent the protected action');
 
-  const timedOutCall = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, tool: 'Bash', input: {} });
+  const timedOutCall = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, requestId:'bash-1', tool: 'Bash', input: {} });
   const timedOut = await waitForPending(first.sessionId, pendingHook.id);
   const timeoutResult = await timedOutCall;
   assert.equal((await timeoutResult.json() as { outcome: string }).outcome, 'deny');
@@ -75,7 +75,7 @@ test('Gateway credentials, approval enforcement, timeout, and SQLite recovery', 
   const timeoutApproval = (await (await request('/v1/approvals', adminToken)).json() as ToolApproval[]).find(a => a.id === timedOut.id)!;
   assert.equal(timeoutApproval.state, 'timeout');
 
-  const restartCall = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, tool: 'Write', input: {} }).catch(() => undefined);
+  const restartCall = request('/v1/decide', first.sessionToken, 'POST', { sessionId: first.sessionId, requestId:'write-1', tool: 'Write', input: {} }).catch(() => undefined);
   const restartPending = await waitForPending(first.sessionId, timedOut.id);
   await gateway.close();
   await new Promise(resolveWait => setTimeout(resolveWait, 1250));
@@ -149,6 +149,6 @@ test('HTTP context publication, reviewed merge, and resumable SSE', async () => 
   const data=new TextDecoder().decode((await reader.read()).value);
   assert.match(data,/text|connected|data:/);
   await reader.cancel();
-  assert.equal((await request(`/v1/sessions/${s.sessionId}/kill`,adminToken,'POST')).status,200);
+  assert.equal((await request(`/v1/sessions/${s.sessionId}/kill`,adminToken,'POST')).status,202);
   assert.equal((await request(`/v1/sessions/${s.sessionId}`,s.sessionToken)).status,403);
 });

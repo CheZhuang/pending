@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { AgentreeService } from '../packages/core/src/index.js';
@@ -9,13 +10,14 @@ export interface GatewayOptions {
     database: string;
     adminToken: string;
     approvalTimeoutMs?: number;
+    consoleOrigins?: string[];
 }
 import type { ToolApproval } from '../packages/contracts/src/gateway.js';
 export type { ToolApproval } from '../packages/contracts/src/gateway.js';
 const digest = (token: string) => createHash('sha256').update(token).digest('hex');
 const text = z.string().min(1);
 const registration = z.object({ runtime: text, cwd: text.optional(), label: text.optional(), branchId: text.optional(), nativeId: text.optional() });
-const decision = z.object({ sessionId: text.optional(), tool: text, input: z.unknown(), nativeSessionId: text.optional(), cwd: text.optional() });
+const decision = z.object({ requestId: text, sessionId: text.optional(), tool: text, input: z.unknown(), nativeSessionId: text.optional(), cwd: text.optional() });
 /** Local daemon boundary: HTTP input never supplies a Core actor. */
 export function createGateway(options: GatewayOptions) {
     if (options.adminToken.length < 32)
@@ -24,9 +26,16 @@ export function createGateway(options: GatewayOptions) {
     const admin = new AgentreeService(store, { type: 'human', id: 'local-admin' });
     store.db.exec(`CREATE TABLE IF NOT EXISTS gateway_credentials (hash TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
     CREATE TABLE IF NOT EXISTS gateway_sessions (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS gateway_exit_reports (session_id TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS gateway_approvals (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));
     CREATE INDEX IF NOT EXISTS gateway_pending_deadline ON gateway_approvals(json_extract(data,'$.state'),json_extract(data,'$.expiresAt'));`);
     const streams = new Set<ServerResponse>();
+    const browserSessions = new Map<string, {
+        origin: string;
+        expires: number;
+    }>();
+    const allowedOrigins = new Set(options.consoleOrigins ?? []);
+    store.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS gateway_request_identity ON gateway_approvals(json_extract(data,'$.sessionId'),json_extract(data,'$.requestId')) WHERE json_extract(data,'$.requestId') IS NOT NULL;`);
     const audit = (type: string, payload: unknown, workspaceId: string, sessionId?: string) => {
         const id = randomUUID();
         store.appendEvent({ id, workspaceId, source: 'gateway', nativeId: id, sessionId, type, mode: 'controlled', payload, occurredAt: new Date().toISOString() });
@@ -35,20 +44,21 @@ export function createGateway(options: GatewayOptions) {
         data: string;
     }[]).map(r => JSON.parse(r.data) as ToolApproval);
     const save = (a: ToolApproval) => store.db.prepare('INSERT OR REPLACE INTO gateway_approvals(id,data) VALUES(?,?)').run(a.id, JSON.stringify(a));
+    // Caller owns the transaction; lifecycle changes can settle multiple approvals atomically.
+    function settle(a: ToolApproval, state: ToolApproval['state'], reason: string) {
+        a.state = state;
+        a.reason = reason;
+        a.decidedAt = new Date().toISOString();
+        save(a);
+        audit('tool.decided', { approvalId: a.id, requestId: a.requestId, outcome: state === 'approved' ? 'allow' : 'deny', state, reason, actor: state === 'timeout' ? 'gateway' : 'local-admin' }, a.workspaceId, a.sessionId);
+    }
     function finish(a: ToolApproval, state: ToolApproval['state'], reason: string) {
         if (a.state !== 'pending')
             throw new DomainError('STATE', 'Approval already decided');
-        if (state !== 'timeout' && Date.parse(a.expiresAt) <= Date.now()) {
-            finish(a, 'timeout', 'Approval deadline elapsed');
+        const overdue = state !== 'timeout' && Date.parse(a.expiresAt) <= Date.now();
+        store.transaction(() => settle(a, overdue ? 'timeout' : state, overdue ? 'Approval deadline elapsed' : reason));
+        if (overdue)
             throw new DomainError('STATE', 'Approval deadline elapsed');
-        }
-        store.transaction(() => {
-            a.state = state;
-            a.reason = reason;
-            a.decidedAt = new Date().toISOString();
-            save(a);
-            audit('tool.decided', { approvalId: a.id, outcome: state === 'approved' ? 'allow' : 'deny', state, reason, actor: state === 'timeout' ? 'gateway' : 'local-admin' }, a.workspaceId, a.sessionId);
-        });
     }
     function expire() {
         const rows = store.db.prepare("SELECT data FROM gateway_approvals WHERE json_extract(data,'$.state')='pending' AND json_extract(data,'$.expiresAt')<=?").all(new Date().toISOString()) as {
@@ -70,6 +80,11 @@ export function createGateway(options: GatewayOptions) {
         if (store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(id)?.state !== 'active')
             throw new DomainError('DENY', 'Session is inactive');
     }
+    function lifecycle(id: string) {
+        const state = String(store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(id)?.state ?? 'ended');
+        const row = store.db.prepare('SELECT data FROM gateway_exit_reports WHERE session_id=?').get(id);
+        return { state, processStatus: row ? 'exit-reported' : 'unknown', ...(row ? { exit: JSON.parse(String(row.data)) } : {}) };
+    }
     async function body(req: IncomingMessage) {
         let raw = '';
         for await (const chunk of req) {
@@ -87,22 +102,59 @@ export function createGateway(options: GatewayOptions) {
             const method = req.method;
             if (path === '/health' && method === 'GET')
                 return send({ status: 'ok' });
-            // No cookie authentication or ambient browser authority; reject browser origins entirely.
-            if (req.headers.origin)
-                throw new DomainError('DENY', 'Browser Origin requests require a same-origin Console proxy');
+            const origin = req.headers.origin;
+            if (origin && !allowedOrigins.has(origin))
+                throw new DomainError('DENY', 'Console origin is not allowed');
+            if (origin) {
+                res.setHeader('Access-Control-Allow-Origin', origin);
+                res.setHeader('Access-Control-Allow-Credentials', 'true');
+                res.setHeader('Vary', 'Origin');
+            }
+            if (method === 'OPTIONS' && origin) {
+                res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+                res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Last-Event-ID');
+                res.writeHead(204);
+                res.end();
+                return;
+            }
             const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '';
-            const isAdmin = timingSafeEqual(Buffer.from(digest(token)), Buffer.from(digest(options.adminToken)));
+            const adminBearer = timingSafeEqual(Buffer.from(digest(token)), Buffer.from(digest(options.adminToken)));
+            const cookie = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith('gateway_console='))?.slice('gateway_console='.length);
+            const browser = cookie ? browserSessions.get(digest(cookie)) : undefined;
+            const browserAdmin = !!browser && browser.expires > Date.now() && (!origin || origin === browser.origin);
+            if (browserAdmin && method !== 'GET' && !origin)
+                throw new DomainError('DENY', 'Browser writes require the paired Origin');
+            const isAdmin = adminBearer || browserAdmin;
             const credential = store.db.prepare('SELECT session_id FROM gateway_credentials WHERE hash=?').get(digest(token));
             if (!isAdmin && !credential)
-                return send({ error: { code: 'UNAUTHORIZED', message: 'Bearer credential required' } }, 401);
+                return send({ error: { code: 'UNAUTHORIZED', message: 'Credential required' } }, 401);
+            if (path === '/v1/console/login' && method === 'POST') {
+                if (!adminBearer || !origin)
+                    throw new DomainError('DENY', 'Admin bearer and allowed Console Origin required');
+                const browserToken = randomBytes(32).toString('hex');
+                browserSessions.set(digest(browserToken), { origin, expires: Date.now() + 8 * 60 * 60 * 1000 });
+                res.setHeader('Set-Cookie', `gateway_console=${browserToken}; HttpOnly; SameSite=Strict; Path=/v1; Max-Age=28800`);
+                return send({ ok: true });
+            }
+            if (path === '/v1/console/logout' && method === 'POST') {
+                if (cookie)
+                    browserSessions.delete(digest(cookie));
+                res.setHeader('Set-Cookie', 'gateway_console=; HttpOnly; SameSite=Strict; Path=/v1; Max-Age=0');
+                return send({ ok: true });
+            }
             const sid = isAdmin ? undefined : String(credential!.session_id);
-            if (sid)
+            if (sid && !(/^\/v1\/sessions\/[^/]+\/end$/.test(path) || path === '/v1/stream'))
                 active(sid);
             const svc = sid ? new AgentreeService(store, { type: 'agent', sessionId: sid }) : admin;
-            const human = () => { if (!isAdmin)
-                throw new DomainError('DENY', 'Human admin credential required'); };
-            const own = (id: string) => { if (sid && sid !== id)
-                throw new DomainError('DENY', 'Session credential mismatch'); return session(id); };
+            const human = () => {
+                if (!isAdmin)
+                    throw new DomainError('DENY', 'Human admin credential required');
+            };
+            const own = (id: string) => {
+                if (sid && sid !== id)
+                    throw new DomainError('DENY', 'Session credential mismatch');
+                return session(id);
+            };
             if (path === '/v1/workspaces' && method === 'GET') {
                 human();
                 return send(store.list('workspace'));
@@ -132,39 +184,61 @@ export function createGateway(options: GatewayOptions) {
             }
             if (path === '/v1/sessions' && method === 'GET') {
                 human();
-                return send(store.list<Session>('session').map(s => ({ ...s, state: store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(s.id)?.state ?? 'ended' })));
+                return send(store.list<Session>('session').map(s => ({ ...s, ...lifecycle(s.id) })));
             }
             const sessionRoute = path.match(/^\/v1\/sessions\/([^/]+)(?:\/(end|kill))?$/);
             if (sessionRoute) {
                 const s = own(sessionRoute[1]);
                 if (method === 'GET' && !sessionRoute[2])
-                    return send(s);
+                    return send({ ...s, ...lifecycle(s.id) });
                 if (method === 'POST' && sessionRoute[2]) {
                     if (sessionRoute[2] === 'kill')
                         human();
-                    expire();
+                    const exiting = sessionRoute[2] === 'end';
+                    const report = exiting ? z.object({ exitCode: z.number().int().nullable().optional(), signal: z.string().nullable().optional() }).parse(await body(req)) : undefined;
+                    const prior = String(store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(s.id)?.state);
+                    const state = exiting ? 'ended' : prior === 'ended' ? 'ended' : 'kill-requested';
                     store.transaction(() => {
-                        store.db.prepare('UPDATE gateway_sessions SET state=? WHERE session_id=?').run(sessionRoute[2] === 'kill' ? 'killed' : 'ended', s.id);
-                        audit(sessionRoute[2] === 'kill' ? 'session.killed' : 'session.ended', {}, s.workspaceId, s.id);
+                        store.db.prepare('UPDATE gateway_sessions SET state=? WHERE session_id=?').run(state, s.id);
+                        const hasExit = report?.exitCode !== undefined || report?.signal !== undefined;
+                        const recorded = store.db.prepare('SELECT 1 FROM gateway_exit_reports WHERE session_id=?').get(s.id);
+                        if (hasExit && !recorded) {
+                            store.db.prepare('INSERT INTO gateway_exit_reports VALUES(?,?)').run(s.id, JSON.stringify(report));
+                            audit('session.exited', report, s.workspaceId, s.id);
+                        }
+                        else if (prior !== state)
+                            audit(exiting ? 'session.ended' : 'session.kill-requested', {}, s.workspaceId, s.id);
                         for (const a of approvals())
-                            if (a.sessionId === s.id && a.state === 'pending')
-                                finish(a, 'denied', 'Session ended');
+                            if (a.sessionId === s.id && a.state === 'pending') {
+                                const overdue = Date.parse(a.expiresAt) <= Date.now();
+                                settle(a, overdue ? 'timeout' : 'denied', overdue ? 'Approval deadline elapsed' : 'Session ended');
+                            }
                     });
-                    return send({ ok: true });
+                    return send({ ok: true, ...lifecycle(s.id) }, exiting || prior === 'ended' ? 200 : 202);
                 }
             }
             if (path === '/v1/decide' && method === 'POST') {
                 if (!sid)
                     throw new DomainError('DENY', 'Session credential required');
                 const b = decision.parse(await body(req));
+                active(sid);
                 if (b.sessionId && b.sessionId !== sid)
                     throw new DomainError('DENY', 'Session credential mismatch');
                 const s = session(sid);
-                const policy = svc.authorize('controlled.execute', s.branchId, s.workspaceId);
-                if (policy.outcome === 'deny')
-                    return send({ outcome: 'deny', reason: policy.reason });
-                const a: ToolApproval = { id: randomUUID(), workspaceId: s.workspaceId, sessionId: sid, tool: b.tool, input: b.input ?? null, state: 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + (options.approvalTimeoutMs ?? 60000)).toISOString(), policyDecisionId: policy.id };
-                store.transaction(() => { save(a); audit('tool.pending', a, s.workspaceId, sid); });
+                const prior = store.db.prepare("SELECT data FROM gateway_approvals WHERE json_extract(data,'$.sessionId')=? AND json_extract(data,'$.requestId')=?").get(sid, b.requestId);
+                let a: ToolApproval;
+                if (prior) {
+                    a = JSON.parse(String(prior.data));
+                    if (a.tool !== b.tool || !isDeepStrictEqual(a.input, b.input ?? null))
+                        throw new DomainError('STATE', 'Request ID already used for different tool input');
+                }
+                else {
+                    const policy = svc.authorize('controlled.execute', s.branchId, s.workspaceId);
+                    if (policy.outcome === 'deny')
+                        return send({ requestId: b.requestId, outcome: 'deny', reason: policy.reason });
+                    a = { id: randomUUID(), requestId: b.requestId, workspaceId: s.workspaceId, sessionId: sid, tool: b.tool, input: b.input ?? null, state: 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + (options.approvalTimeoutMs ?? 60000)).toISOString(), policyDecisionId: policy.id };
+                    store.transaction(() => { save(a); audit('tool.pending', a, s.workspaceId, sid); });
+                }
                 // Only an attached pre-execution hook can enforce the returned decision.
                 while (!res.destroyed) {
                     const row = store.db.prepare('SELECT data FROM gateway_approvals WHERE id=?').get(a.id)!;
@@ -178,7 +252,7 @@ export function createGateway(options: GatewayOptions) {
                             outcome = 'deny';
                         }
                         audit('tool.execution-decision', { approvalId: a.id, outcome }, s.workspaceId, sid);
-                        return send({ approvalId: a.id, outcome, reason: outcome === 'deny' && current.state === 'approved' ? 'Session is inactive' : current.reason, by: 'Gateway' });
+                        return send({ requestId: a.requestId, approvalId: a.id, outcome, reason: outcome === 'deny' && current.state === 'approved' ? 'Session is inactive' : current.reason, by: 'Gateway' });
                     }
                     await new Promise(r => setTimeout(r, 50));
                 }
@@ -229,6 +303,10 @@ export function createGateway(options: GatewayOptions) {
                 res.write(': connected\n\n');
                 streams.add(res);
                 const poll = () => {
+                    if (browser && (!cookie || !browserSessions.has(digest(cookie)) || browser.expires <= Date.now())) {
+                        res.end();
+                        return;
+                    }
                     const rows = store.db.prepare('SELECT sequence,data FROM events WHERE sequence>? ORDER BY sequence LIMIT 100').all(cursor) as {
                         sequence: number;
                         data: string;
@@ -289,6 +367,12 @@ export function createGateway(options: GatewayOptions) {
             send({ error: { code, message: code === 'INTERNAL' ? 'Internal server error' : (error as Error).message } }, code === 'NOT_FOUND' ? 404 : code === 'DENY' || code === 'IDENTITY' ? 403 : ['STATE', 'STALE', 'REVIEW', 'REQUIRE-APPROVAL'].includes(code) ? 409 : code === 'INTERNAL' ? 500 : 400);
         }
     });
-    return { server, store, close: async () => { clearInterval(timer); for (const res of streams)
-            res.end(); server.closeAllConnections(); await new Promise<void>((r, j) => server.close(e => e ? j(e) : r())); store.db.close(); } };
+    return { server, store, close: async () => {
+            clearInterval(timer);
+            for (const res of streams)
+                res.end();
+            server.closeAllConnections();
+            await new Promise<void>((r, j) => server.close(e => e ? j(e) : r()));
+            store.db.close();
+        } };
 }
