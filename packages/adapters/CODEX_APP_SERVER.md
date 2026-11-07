@@ -9,3 +9,9 @@ Use `startTurn()` to begin work in a managed thread and `interruptTurn()` to int
 The app-server event stream uses opaque notification method names and JSON params. The adapter preserves the method and params in each event payload instead of assuming every notification kind has a fixed shape. Cursor state can be stored with `SqliteCursorStore`, which uses the existing generic entity storage API and does not add a private SQL table.
 
 Protocol references: [Codex App Server – OpenAI Developers](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) describes stdio JSON messages, initialization, `thread/start`, `thread/resume`, `turn/start`, and event notifications. The broader [Codex as a platform article](https://developers.openai.com/blog/codex-as-a-platform) identifies app-server as the managed integration surface.
+
+## Recovery and server requests
+
+Observations are written to an atomic local journal before ingestion. The default path is the user application-data directory under `agentree/codex-journals`; `journalPath` allows a host to select another application-data path. SQLite remains the domain source of truth; the journal is a delivery spool. Acknowledgement removes delivered records only after the Gateway cursor is saved. Unacknowledged records retain their event IDs across process restarts, while each new observation receives a UUID independent of its cursor sequence. The journal assumes one active owner per native thread. It cannot reconstruct notifications lost before they reach the adapter.
+
+App Server requests are distinguished from responses even when their IDs overlap. Without a configured `onServerRequest` handler, command and file-change approvals are declined, permission grants are empty, and unsupported requests receive a JSON-RPC error. A trusted host can provide its own approval handler.
