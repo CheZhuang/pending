@@ -80,3 +80,18 @@ No graphical dashboard, Gemini CLI adapter, autonomous multi-agent orchestration
 Two real agent runtimes can join a workspace, generate observable events, share scoped context, and participate in human-governed merges.
 
 At least one Gateway-managed operation must be genuinely authorized or denied before execution, with the result recorded in SQLite.
+
+## Core foundation (Task A)
+
+Requires Node.js 24+. Run `npm ci`, `npm run typecheck`, `npm test`, and
+`npm run build`. The package layout is declared in `pnpm-workspace.yaml`;
+this initial repository also retains its npm lockfile for existing workflows.
+Tests currently use the Node test runner (no additional test dependency).
+
+The daemon-facing `ApplicationService` and `AgentreeService` are exported from
+`packages/core/src/index.ts`; shared Zod schemas and models are in
+`packages/contracts/src/index.ts`. Construct `SqliteStore` with a database path
+in the user's application data directory. See `packages/core/README.md` for the
+trusted identity boundary, controlled operations, observed events, and review
+semantics. This foundation does not wire the placeholder HTTP server to an
+unauthenticated agent endpoint.
