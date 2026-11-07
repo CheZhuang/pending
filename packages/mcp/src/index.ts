@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { DomainError, scopeSchema, type Knowledge, type Session } from '../../contracts/src/index.js';
+import { ContextSync, type DeliveryLedger, type Level, type FocusDeclaration } from '../../sync/src/index.js';
+import { normalizeScope } from '../../core/src/scope.js';
 import type { ApplicationService } from '../../core/src/index.js';
 
 export interface BoundMcpSession {
@@ -9,6 +11,8 @@ export interface BoundMcpSession {
   session: Session;
   /** Constructed for the same authenticated Agentree session. */
   service: ApplicationService;
+  /** Durable delivery ledger supplied by the daemon (EntityLedger for SQLite). */
+  ledger: DeliveryLedger;
 }
 
 const contextOutputSchema = {
@@ -41,7 +45,9 @@ function tool<T>(work: (args: T) => unknown) {
 
 /** Build an MCP server already bound to one authenticated Agentree session. */
 export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
-  const { session, service } = binding;
+  const session = { ...binding.session };
+  const { service, ledger } = binding;
+  const sync = new ContextSync(service, ledger);
   const server = new McpServer({ name: 'agentree', version: '0.1.0' });
 
   server.registerTool('workspace_status', {
@@ -53,20 +59,44 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     workspace: service.workspace(session.workspaceId),
     branches: service.branches(session.workspaceId),
     currentSession: { id: session.id, runtime: session.runtime, branchId: session.branchId },
+    revision: service.contextRevision(session.branchId),
   })));
 
   server.registerTool('context_sync', {
     title: 'Sync context',
-    description: 'Get context commits on this session branch newer than afterRevision. Scope filtering is not yet applied.',
-    inputSchema: { afterRevision: z.number().int().min(0).optional() },
+    description: 'Pull relevant context with authority, provenance and a token budget. Reuse requestId to retry a lost response; acknowledge item IDs explicitly.',
+    inputSchema: {
+      requestId: z.string().min(1).max(200),
+      level: z.enum(['signal', 'digest', 'full']).optional(),
+      budgetTokens: z.number().int().min(1).max(32000).optional(),
+      redeliverUnacknowledged: z.boolean().optional(),
+    },
     outputSchema: contextOutputSchema,
-  }, tool(({ afterRevision }: { afterRevision?: number }) => {
-    // Core returns immutable history ordered by target-branch attachment revision.
-    // A merged commit's own revision belongs to its original branch.
-    const history = service.context(session.branchId);
-    const offset = afterRevision ?? 0;
-    if (offset > history.length) throw new DomainError('STALE', 'Cursor is ahead of branch history');
-    return { branchId: session.branchId, currentRevision: history.length, commits: history.slice(offset) };
+  }, tool((args: { requestId: string; level?: Level; budgetTokens?: number; redeliverUnacknowledged?: boolean }) => {
+    service.workspace(session.workspaceId); // also authorize cached response replay
+    return sync.sync({ ...args, session });
+  }));
+
+  server.registerTool('context_acknowledge', {
+    title: 'Acknowledge context',
+    description: 'Confirm that this session has taken the delivered items into account.',
+    inputSchema: { itemIds: z.array(z.string().min(1)).max(1000) },
+    outputSchema: contextOutputSchema,
+  }, tool(({ itemIds }: { itemIds: string[] }) => {
+    service.workspace(session.workspaceId); // authorize before writing delivery metadata
+    return { acknowledged: sync.acknowledge(session.id, itemIds) };
+  }));
+
+  server.registerTool('context_subscribe', {
+    title: 'Subscribe to context scopes',
+    description: 'Extend or override inferred focus with explicit workspace, folder, file or task scopes. Empty extend restores inferred focus.',
+    inputSchema: { scopes: z.array(scopeSchema).max(100), mode: z.enum(['extend', 'override']).optional() },
+    outputSchema: contextOutputSchema,
+  }, tool((args: FocusDeclaration) => {
+    const workspace = service.workspace(session.workspaceId);
+    const scopes = args.scopes.map(scope => normalizeScope(scope, workspace.roots));
+    sync.subscribe(session.id, { scopes, mode: args.mode ?? 'extend' });
+    return { scopes, mode: args.mode ?? 'extend' };
   }));
 
   server.registerTool('context_get', {
@@ -79,7 +109,8 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
     if (!service.branches(session.workspaceId).some(item => item.id === selectedBranch)) {
       throw new DomainError('NOT_FOUND', 'Branch is not in this workspace');
     }
-    return { branchId: selectedBranch, commits: service.lookup(selectedBranch) };
+    const snapshot = service.snapshot(selectedBranch);
+    return { branchId: selectedBranch, revision: snapshot.revision, commits: snapshot.knowledge };
   }));
 
   server.registerTool('context_publish', {
@@ -90,12 +121,14 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
       key: z.string().min(1),
       body: z.string().min(1),
       scope: scopeSchema,
+      impactScope: scopeSchema.optional(),
+      expected: z.object({ branchRevision: z.number().int().min(0), mainRevision: z.number().int().min(0) }).optional(),
       eventIds: z.array(z.string().min(1)).optional(),
     },
     outputSchema: contextOutputSchema,
-  }, tool((args: { kind: Knowledge['kind']; key: string; body: string; scope: Knowledge['scope']; eventIds?: string[] }) => {
-    const knowledge: Knowledge = { kind: args.kind, key: args.key, body: args.body, scope: args.scope };
-    return service.publish(session.branchId, knowledge, args.eventIds ?? []);
+  }, tool((args: { kind: Knowledge['kind']; key: string; body: string; scope: Knowledge['scope']; impactScope?: Knowledge['scope']; expected?: { branchRevision: number; mainRevision: number }; eventIds?: string[] }) => {
+    const knowledge: Knowledge = { kind: args.kind, key: args.key, body: args.body, scope: args.scope, impactScope: args.impactScope };
+    return service.publish(session.branchId, knowledge, args.eventIds ?? [], args.expected);
   }));
 
   server.registerTool('merge_request', {
@@ -106,10 +139,11 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
       targetBranchId: z.string().min(1),
       commitIds: z.array(z.string().min(1)).min(1),
       expectedRevision: z.number().int().min(0),
+      expectedMainRevision: z.number().int().min(0).optional(),
     },
     outputSchema: contextOutputSchema,
-  }, tool((args: { sourceBranchId?: string; targetBranchId: string; commitIds: string[]; expectedRevision: number }) =>
-    service.createMerge(args.sourceBranchId ?? session.branchId, args.targetBranchId, args.commitIds, args.expectedRevision)));
+  }, tool((args: { sourceBranchId?: string; targetBranchId: string; commitIds: string[]; expectedRevision: number; expectedMainRevision?: number }) =>
+    service.createMerge(args.sourceBranchId ?? session.branchId, args.targetBranchId, args.commitIds, args.expectedRevision, args.expectedMainRevision)));
 
   server.registerTool('review_status', {
     title: 'Review status',
