@@ -15,6 +15,7 @@ import { ingestNextBatch, MemoryCursorStore, MockAgentAdapter, type NativeRecord
 import { createAgentreeMcpServer } from '../packages/mcp/src/index.js';
 import { ContextSync, EntityLedger, type ContextDelta } from '../packages/sync/src/index.js';
 import { run } from '../apps/cli/src/cli.js';
+import { Home } from '../apps/cli/src/home.js';
 
 export interface DemoIo {
   out(text: string): void;
@@ -125,7 +126,7 @@ export async function runDemo(io: DemoIo, home = mkdtempSync(join(tmpdir(), 'age
   const codexSession = json<Session>('session', 'register', 'codex-api', '--agent', 'codex', '--name', 'Codex', '--runtime', 'codex', '--native', 'thread-api');
   say('(sessions registered by the human; agents never pick their own identity)');
 
-  const store = new SqliteStore(join(home, 'agentree.sqlite'));
+  const store = new SqliteStore(new Home(home).dbPath); // the same file the CLI uses
   const claude = await DemoAgent.connect('claude', store, claudeSession);
   const codex = await DemoAgent.connect('codex', store, codexSession);
   try {

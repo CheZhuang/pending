@@ -2,14 +2,15 @@
 // review inspection, approve/resolve, preview without delivery, scriptable
 // JSON, and how authorization / stale / usage errors are presented.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { Knowledge } from '../../../packages/contracts/src/index.js';
 import { AgentreeService } from '../../../packages/core/src/index.js';
 import { SqliteStore } from '../../../packages/storage/src/index.js';
 import { run } from './cli.js';
+import { agentreeHome, DB_FILE, Home } from './home.js';
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), 'agentree-cli-'));
@@ -30,7 +31,7 @@ function demo() {
   const alice = s.cli('session', 'register', 'alice', '--agent', 'claude-1', '--runtime', 'claude', '--native', 'c-1', '--json').json().data;
   const bob = s.cli('session', 'register', 'bob', '--agent', 'codex-1', '--runtime', 'codex', '--native', 'x-1', '--json').json().data;
   // Agents act through their own authorized services on the same SQLite file.
-  const store = new SqliteStore(join(s.home, 'agentree.sqlite'));
+  const store = new SqliteStore(new Home(s.home).dbPath);
   const aliceAgent = new AgentreeService(store, { type: 'agent', sessionId: alice.id });
   const bobAgent = new AgentreeService(store, { type: 'agent', sessionId: bob.id });
   aliceAgent.ingest({ id: 'e1', workspaceId: ws.id, source: 'claude:c-1', nativeId: '1', sessionId: alice.id, type: 'tool.use', mode: 'observed',
@@ -163,4 +164,24 @@ test('stale merges and missing ids are explained, not dumped as stack traces', (
     assert.equal(missing.json().ok, false);
     assert.equal(d.cli('merge', 'list', '--all', '--json').json().data.length, 2);
   } finally { d.done(); }
+});
+
+test('the CLI uses the same data directory and SQLite file as the gateway daemon', () => {
+  const gatewayDir = mkdtempSync(join(tmpdir(), 'agentree-gw-'));
+  const cliDir = mkdtempSync(join(tmpdir(), 'agentree-cli-home-'));
+  const io = (env: NodeJS.ProcessEnv) => ({ out: () => undefined, err: () => undefined, env: { AGENTREE_USER: 'reviewer', ...env }, cwd: '/repo' });
+  try {
+    assert.equal(DB_FILE, 'gateway.sqlite');
+    // GATEWAY_DATA_DIR is honoured, exactly like `npm start` (src/index.ts).
+    assert.equal(run(['init', 'shared'], io({ GATEWAY_DATA_DIR: gatewayDir })), 0);
+    assert.ok(existsSync(join(gatewayDir, 'gateway.sqlite')));
+    // AGENTREE_HOME still wins when both are set.
+    assert.equal(run(['init', 'mine'], io({ GATEWAY_DATA_DIR: gatewayDir, AGENTREE_HOME: cliDir })), 0);
+    assert.ok(existsSync(join(cliDir, 'gateway.sqlite')));
+    // Default matches the gateway's default directory.
+    assert.equal(agentreeHome({}), join(homedir(), '.local', 'share', 'agentree'));
+  } finally {
+    rmSync(gatewayDir, { recursive: true, force: true });
+    rmSync(cliDir, { recursive: true, force: true });
+  }
 });

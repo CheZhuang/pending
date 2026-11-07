@@ -22,7 +22,7 @@ npm ci
 npm run demo
 ```
 
-The demo writes all state to a new temporary directory, never to the project, and prints that
+The demo writes all state to a new temporary directory (its `gateway.sqlite`, the same file layout the gateway uses), never to the project, and prints that
 directory at the end. You can then inspect the result with the CLI:
 
 ```bash
