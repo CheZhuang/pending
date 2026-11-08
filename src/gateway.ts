@@ -31,13 +31,14 @@ const decision = z.object({ requestId: text, sessionId: text.optional(), tool: t
 const safeRevision = z.number().min(0).refine(Number.isSafeInteger, 'Expected a safe integer revision');
 const mainWrite = z.object({ body: z.string().trim().min(1), files: z.array(z.object({ rootId: text, path: text })).optional(), expectedRevision: safeRevision, remove: z.boolean().optional() });
 const mainRestore = z.object({ revision: safeRevision, expectedRevision: safeRevision });
-function decodeMainSegment(value: string): string {
+function decodePathSegment(value: string, what: string): string {
     let decoded: string;
     try { decoded = decodeURIComponent(value); }
-    catch { throw new DomainError('BODY','Malformed URL encoding in Main path'); }
-    if (decoded.includes('/') || decoded.includes('\\')) throw new DomainError('BODY','Main path components cannot contain slashes');
+    catch { throw new DomainError('BODY',`Malformed URL encoding in ${what} path`); }
+    if (decoded.includes('/') || decoded.includes('\\')) throw new DomainError('BODY',`${what} path components cannot contain slashes`);
     return decoded;
 }
+const decodeMainSegment = (value: string) => decodePathSegment(value, 'Main');
 /** Local daemon boundary: HTTP input never supplies a Core actor. */
 export function createGateway(options: GatewayOptions) {
     const humanHash = digest(ensureLocalHumanToken(options.database));
@@ -532,7 +533,9 @@ export function createGateway(options: GatewayOptions) {
             }
             const supervisionRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/(supervision|conflicts|merges)(?:\/([^/]+))?$/);
             if (supervisionRoute) {
-                const [,wid,kind,conflictId] = supervisionRoute;
+                // Derived conflict ids contain ':' and clients send it percent-encoded.
+                const [,wid,kind,rawConflictId] = supervisionRoute;
+                const conflictId = rawConflictId === undefined ? undefined : decodePathSegment(rawConflictId, 'Conflict');
                 if (method === 'GET' && !conflictId) {
                     if (kind === 'supervision') {
                         const view = svc.supervision(wid!);

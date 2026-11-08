@@ -230,3 +230,23 @@ test('HTTP acceptance reports pending conflicts and records an authorized human 
   assert.equal(result.overrideConflicts,true);
   assert.equal(result.mainRevision,main.revision+1);
 });
+
+test('HTTP decisions accept derived conflict ids, which contain a colon and arrive URL-encoded', async () => {
+  const s=await registerSession() as Awaited<ReturnType<typeof registerSession>>&{branchId:string};
+  const file={rootId:'root',path:'src/auth/derived-conflict.ts'};
+  const mainPath=`/v1/workspaces/${s.workspaceId}/main`;
+  const before=await (await request(mainPath,adminToken)).json() as {revision:number};
+  assert.ok((await request(mainPath,adminToken,'POST',{body:'Tokens expire after 15 minutes',files:[file],expectedRevision:before.revision})).ok);
+  assert.ok((await request(`/v1/branches/${s.branchId}/work`,s.sessionToken,'POST',{body:'Changed token checks',files:[file]})).ok);
+  const listed=await (await request(`/v1/workspaces/${s.workspaceId}/conflicts`,adminToken)).json() as Array<{id:string;status:string;branchIds:string[]}>;
+  const derived=listed.find(c=>c.branchIds.includes(s.branchId)&&c.id.startsWith('conflict:'));
+  assert.ok(derived,'a Main overlap produces a derived conflict');
+  // The Console encodes path segments, so ':' arrives as %3A.
+  const decided=await request(`/v1/workspaces/${s.workspaceId}/conflicts/${encodeURIComponent(derived.id)}`,adminToken,'POST',{status:'dismissed',explanation:'Reviewed: the edits are compatible'});
+  assert.equal(decided.status,200);
+  assert.equal((await decided.json() as {id:string;status:string}).status,'dismissed');
+  const after=await (await request(`/v1/workspaces/${s.workspaceId}/conflicts`,adminToken)).json() as Array<{id:string;status:string}>;
+  assert.equal(after.find(c=>c.id===derived.id)?.status,'dismissed');
+  const malformed=await request(`/v1/workspaces/${s.workspaceId}/conflicts/%E0%A4%A`,adminToken,'POST',{status:'dismissed',explanation:'x'});
+  assert.equal(malformed.status,400);
+});
