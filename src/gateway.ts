@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { AgentreeService } from '../packages/core/src/index.js';
 import { DomainError, mainInputSchema, workInputSchema, type Session, type Workspace } from '../packages/contracts/src/index.js';
+import { TaskDispatch } from './task-dispatch.js';
 export interface GatewayOptions {
     database: string;
     adminToken: string;
@@ -40,6 +41,7 @@ export function createGateway(options: GatewayOptions) {
         const id = randomUUID();
         store.appendEvent({ id, workspaceId, source: 'gateway', nativeId: id, sessionId, type, mode: 'controlled', payload, occurredAt: new Date().toISOString() });
     };
+    const tasks = new TaskDispatch(store,(type,task)=>audit(type,{taskId:task.id,requestId:task.requestId,status:task.status,nativeTurnId:task.nativeTurnId,reason:task.reason},task.workspaceId,task.sessionId));
     const approvals = () => (store.db.prepare('SELECT data FROM gateway_approvals ORDER BY rowid').all() as {
         data: string;
     }[]).map(r => JSON.parse(r.data) as ToolApproval);
@@ -83,7 +85,8 @@ export function createGateway(options: GatewayOptions) {
     function lifecycle(id: string) {
         const state = String(store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(id)?.state ?? 'ended');
         const row = store.db.prepare('SELECT data FROM gateway_exit_reports WHERE session_id=?').get(id);
-        return { state, processStatus: row ? 'exit-reported' : 'unknown', ...(row ? { exit: JSON.parse(String(row.data)) } : {}) };
+        const latestTask=tasks.list(id)[0];
+        return { state, processStatus: row ? 'exit-reported' : 'unknown', ...(row ? { exit: JSON.parse(String(row.data)) } : {}),taskDispatch:{available:state==='active'&&session(id).runtime==='codex-app-server'&&tasks.available(id),...(latestTask?{latestTask:{id:latestTask.id,status:latestTask.status,nativeTurnId:latestTask.nativeTurnId}}:{})} };
     }
     async function body(req: IncomingMessage) {
         let raw = '';
@@ -213,6 +216,7 @@ export function createGateway(options: GatewayOptions) {
                                 const overdue = Date.parse(a.expiresAt) <= Date.now();
                                 settle(a, overdue ? 'timeout' : 'denied', overdue ? 'Approval deadline elapsed' : 'Session ended');
                             }
+                        if(exiting)tasks.sessionEnded(s.id);
                     });
                     return send({ ok: true, ...lifecycle(s.id) }, exiting || prior === 'ended' ? 200 : 202);
                 }
@@ -292,7 +296,46 @@ export function createGateway(options: GatewayOptions) {
             }
             if (path === '/v1/events' && method === 'POST') {
                 const b = z.object({ id: text, workspaceId: text, source: text, nativeId: text, sessionId: text.optional(), type: text, mode: z.literal('observed'), payload: z.unknown(), occurredAt: text }).parse(await body(req));
-                return send({ inserted: svc.ingest({ ...b, payload: b.payload }) });
+                const inserted=svc.ingest({ ...b, payload: b.payload });
+                if(inserted&&b.sessionId)tasks.observe(b.sessionId,b.type,b.payload);
+                return send({ inserted });
+            }
+            if(path==='/v1/tasks'&&method==='POST') {
+                human();
+                const b=z.object({sessionId:text,instructions:text.max(100000),includeMain:z.boolean().default(false),requestId:text.max(200)}).parse(await body(req));
+                const target=session(b.sessionId);
+                if(!tasks.byRequestId(b.requestId))active(target.id);
+                const snapshot=b.includeMain?admin.main(target.workspaceId):null;
+                const mainContext=snapshot?{revision:snapshot.revision,entries:snapshot.entries.filter(e=>!e.removed).map(e=>({id:e.id,body:e.body}))}:null;
+                return send(tasks.submit({...b,mainContext},target),201);
+            }
+            if(path==='/v1/tasks'&&method==='GET') {
+                human();
+                return send(tasks.list(url.searchParams.get('sessionId')??undefined));
+            }
+            const taskRoute=path.match(/^\/v1\/tasks\/([^/]+)(?:\/(cancel))?$/);
+            if(taskRoute) {
+                human();
+                if(method==='GET'&&!taskRoute[2])return send(tasks.get(taskRoute[1]));
+                if(method==='POST'&&taskRoute[2]==='cancel')return send(tasks.cancel(taskRoute[1]));
+            }
+            if(path==='/v1/native/tasks/next'&&method==='GET') {
+                if(!sid)throw new DomainError('DENY','Session credential required');
+                if(url.searchParams.get('busy')==='1'){tasks.heartbeat(sid);return send(null);}
+                return send(tasks.claim(sid));
+            }
+            const nativeTaskRead=path.match(/^\/v1\/native\/tasks\/([^/]+)$/);
+            if(nativeTaskRead&&method==='GET'){
+                if(!sid)throw new DomainError('DENY','Session credential required');
+                const t=tasks.get(nativeTaskRead[1]);
+                if(t.sessionId!==sid)throw new DomainError('DENY','Task belongs to another session');
+                return send(t);
+            }
+            const nativeTaskRoute=path.match(/^\/v1\/native\/tasks\/([^/]+)\/(accepted|unavailable)$/);
+            if(nativeTaskRoute&&method==='POST') {
+                if(!sid)throw new DomainError('DENY','Session credential required');
+                const b=z.object({nativeTurnId:text.optional(),reason:text.optional()}).parse(await body(req));
+                return send(nativeTaskRoute[2]==='accepted'?tasks.accepted(nativeTaskRoute[1],sid,text.parse(b.nativeTurnId)):tasks.unavailable(nativeTaskRoute[1],sid,text.parse(b.reason)));
             }
             if (path === '/v1/stream' && method === 'GET') {
                 let cursor = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0);

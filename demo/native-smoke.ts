@@ -16,6 +16,7 @@ await new Promise<void>(resolve=>gateway.server.listen(0,'127.0.0.1',resolve));
 const address=gateway.server.address();if(!address||typeof address==='string')throw new Error('No Gateway socket');
 const gatewayUrl=`http://127.0.0.1:${address.port}`;
 let native:ManagedCodex|undefined;
+let dispatchEvidence:unknown;
 const headers={authorization:`Bearer ${adminToken}`,'content-type':'application/json'};
 // Smoke review grants only literal reads of the one synthetic fixture; all other tool requests are denied.
 const reviews=setInterval(()=>{void (async()=>{
@@ -36,9 +37,24 @@ try {
   native=await ManagedCodex.open({gatewayUrl,databasePath:database,cwd:directory,adminToken,stateDirectory:join(directory,'state'),adapter:{args:['app-server','--listen','stdio://','-c','mcp_servers={}'],threadStartParams:{approvalPolicy:'untrusted',sandbox:'read-only'}}});
   sessionId=native.gateway.session.id;
   console.log(JSON.stringify({phase:'registered',runtime,sessionId,nativeId:native.binding.nativeId}));
-  const started=await native.startTurn(prompt);const turn=await native.waitForTurn(started.turn.id,180000);
-  console.log(JSON.stringify({phase:'native-turn',status:turn.status}));
-  if(turn.status!=='completed')throw new Error(`Codex turn ${turn.status}: ${JSON.stringify(turn.error)}`);
+  const readyDeadline=Date.now()+10000;let ready=false;
+  while(Date.now()<readyDeadline&&!ready) {
+   const lifecycle=await (await fetch(`${gatewayUrl}/v1/sessions/${sessionId}`,{headers})).json() as {taskDispatch?:{available:boolean}};
+   ready=lifecycle.taskDispatch?.available===true;
+   if(!ready)await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  if(!ready)throw new Error('Managed Codex runner did not become available');
+  const task=await (await fetch(`${gatewayUrl}/v1/tasks`,{method:'POST',headers,body:JSON.stringify({sessionId,instructions:prompt,requestId:'native-smoke-dispatch-1'})})).json() as {id:string;status:string};
+  if(task.status!=='submitted')throw new Error(`Task was not queued for the live Codex runner: ${task.status}`);
+  console.log(JSON.stringify({phase:'task-submitted',taskId:task.id,status:task.status}));
+  const deadline=Date.now()+180000;let latest=task;
+  while(Date.now()<deadline&&!['completed','failed','delivery-unavailable','outcome-unknown'].includes(latest.status)) {
+   await new Promise(resolve=>setTimeout(resolve,250));
+   latest=await (await fetch(`${gatewayUrl}/v1/tasks/${task.id}`,{headers})).json() as typeof task;
+  }
+  console.log(JSON.stringify({phase:'task-terminal',taskId:latest.id,status:latest.status}));
+  if(latest.status!=='completed')throw new Error(`Dispatched task ${latest.status}`);
+  dispatchEvidence=latest;
  }else {
   const previous=process.env.HARNESS_ADMIN_TOKEN;process.env.HARNESS_ADMIN_TOKEN=adminToken;
   try {
@@ -60,6 +76,6 @@ try {
   const replay=await native.gateway.ingest(nativeEvents[0] as Parameters<typeof native.gateway.ingest>[0]);
   if(replay)throw new Error('Gateway accepted a retried native event twice');
  }
- writeFileSync(join(directory,'evidence.json'),JSON.stringify({runtime,sessionId,snapshot,events},null,2),{mode:0o600});
+ writeFileSync(join(directory,'evidence.json'),JSON.stringify({runtime,sessionId,dispatch:dispatchEvidence,snapshot,events},null,2),{mode:0o600});
  console.log(JSON.stringify({phase:'passed',runtime,evidence:join(directory,'evidence.json')}));
 }finally{clearInterval(reviews);await native?.close();await gateway.close();console.log(`Smoke state: ${directory}`);}
