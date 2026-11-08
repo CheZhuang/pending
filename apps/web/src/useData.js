@@ -1,9 +1,11 @@
 // Load data for a view and reload it when its dependencies change (workspace
 // switch, or a matching live event). Bursts of events collapse into one reload.
+// A workspace switch drops in-flight results and clears the previous workspace's
+// data at once, so a slow response can never show workspace A while B is selected.
 import { onBeforeUnmount, ref, watch } from 'vue';
-import { guard } from './state.js';
+import { guard, state } from './state.js';
 
-export function useData(load, deps, { delay = 150 } = {}) {
+export function useData(load, deps, { delay = 150, workspaceScoped = true } = {}) {
   const data = ref(null);
   const error = ref(null);
   const loading = ref(false);
@@ -23,6 +25,10 @@ export function useData(load, deps, { delay = 150 } = {}) {
     }
   }
 
+  if (workspaceScoped) {
+    // Sync, so it runs before the deps watcher schedules the reload for the new workspace.
+    watch(() => state.workspaceId, () => { run += 1; data.value = null; error.value = null; loading.value = false; }, { flush: 'sync' });
+  }
   watch(deps, () => { clearTimeout(timer); timer = setTimeout(reload, data.value ? delay : 0); }, { immediate: true });
   onBeforeUnmount(() => clearTimeout(timer));
   return { data, error, loading, reload };
