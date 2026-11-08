@@ -1,5 +1,7 @@
 # Local security model
 
+Top-level browser GET navigations to `/` and `/index.html` may open the public Console shell from another site. This exception requires Fetch Metadata identifying a document navigation; it never applies to `/v1/` API requests, subresources, or writes.
+
 Agentree is a single-user local tool. It listens only on loopback. There is no account, password, admin bearer, browser session, cookie, pairing, or external authentication service. Requests without Authorization act as the human `local-admin`; this is an authority label in audit records, not proof of a particular physical person's presence. Existing admin-token files are unused and can be deleted.
 
 The HTTP boundary checks Host against localhost/127.0.0.1 and the actual listening port to reject DNS rebinding. Origins must match the Gateway origin or an explicitly configured loopback Console development origin. Browser writes carrying Fetch Metadata require Origin; cross-site requests without Origin are rejected. These checks apply before human and native operations. CORS alone is not authorization. SSE uses the same origin checks without cookies. Non-browser local CLI requests may omit Origin. The default Vite origins trust code served on port 5173; set GATEWAY_CONSOLE_ORIGINS to an empty string when development is unnecessary.
