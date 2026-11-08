@@ -97,7 +97,7 @@ export class ManagedCodex {
         }
         if(!bootstrapDone)throw new Error('Codex bootstrap turn did not complete');
         await adapter.close();adapter=undefined;
-        gateway=await NativeGatewayClient.register(options.gatewayUrl,{runtime:'codex-app-server',cwd,label:options.label??'Codex',branchId:options.branchId,nativeId});
+        gateway=await NativeGatewayClient.register(options.gatewayUrl,{runtime:'codex-app-server',cwd,label:options.label??'Codex',branchId:options.branchId,nativeId},options.databasePath);
         created=true;
       }
       if(gateway.session.runtime!=='codex-app-server')throw new Error('Resume registration is not a Codex App Server session');

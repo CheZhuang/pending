@@ -3,6 +3,7 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { agentreeHome } from './home.js';
+import { localHumanHeaders } from '../../../packages/adapters/src/local-auth.js';
 
 /** Bind is the daemon singleton lock; never fall back to a different port or database. */
 export async function startLocal(): Promise<string> {
@@ -36,10 +37,19 @@ export async function startLocal(): Promise<string> {
     }
     if (!ready) throw new Error(`Gateway did not start; see ${join(home,'gateway.log')}`);
   }
+  const response = await fetch(`${url}/v1/console-ticket`, {method:'POST', headers:localHumanHeaders(url, join(home,'gateway.sqlite')), redirect:'error', signal:AbortSignal.timeout(5000)});
+  if (!response.ok) throw new Error(`Gateway Console authorization failed: HTTP ${response.status}`);
+  const {ticket} = await response.json() as {ticket:string};
+  const consoleBase = process.env.AGENTREE_CONSOLE_URL ?? url;
+  const target = new URL(consoleBase);
+  if (target.protocol !== 'http:' || !['localhost','127.0.0.1'].includes(target.hostname) || target.username || target.password)
+    throw new Error('Console URL must be loopback HTTP');
+  target.hash = `agentree-ticket=${encodeURIComponent(ticket)}`;
+  const consoleUrl = target.toString();
   if (process.env.AGENTREE_NO_OPEN !== '1') {
     const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
-    const browser = spawn(command,[url],{stdio:'ignore',detached:true});
+    const browser = spawn(command,[consoleUrl],{stdio:'ignore',detached:true});
     browser.on('error',()=>{}); browser.unref();
   }
-  return url;
+  return consoleUrl;
 }

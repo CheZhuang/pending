@@ -6,17 +6,37 @@ import { ApiError } from './errors.js';
 const ENV = import.meta.env ?? {};
 const BASE = (ENV.VITE_GATEWAY_URL || (ENV.DEV ? 'http://localhost:8787' : '')).replace(/\/$/, '');
 
+// The launcher supplies a one-use capability in a fragment, which is never sent
+// in an HTTP URL. Remove it before any later navigation or request.
+const consoleReady = (async () => {
+  if (typeof window === 'undefined') return;
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const ticket = fragment.get('agentree-ticket');
+  if (!ticket) return;
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  const response = await fetch(`${BASE}/v1/console-session`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket }),
+  });
+  if (!response.ok) throw new ApiError(response.status, 'UNAUTHORIZED', 'Console access expired. Open Agentree again from the local CLI.');
+})();
+// request()/stream() surface errors; avoid an unhandled rejection during startup.
+consoleReady.catch(() => {});
+
 async function request(path, { method = 'GET', body } = {}) {
   let response;
   try {
+    await consoleReady;
     response = await fetch(`${BASE}${path}`, {
       method,
+      credentials: 'include',
       headers: {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(0, 'NETWORK', `Cannot reach the gateway at ${BASE}`);
   }
   const text = await response.text();
@@ -24,7 +44,7 @@ async function request(path, { method = 'GET', body } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!response.ok) {
     const error = data?.error ?? {};
-    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, error.message ?? response.statusText, error.details);
+    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, response.status === 401 ? 'Open Agentree from the local CLI to authorize this Console.' : error.message ?? response.statusText, error.details);
   }
   return data;
 }
@@ -105,14 +125,18 @@ export const live = {
    */
   stream(workspaceId, after, { onEvent, onStatus }) {
     const url = `${BASE}/v1/stream?after=${after}&workspaceId=${encodeURIComponent(workspaceId)}`;
-    const source = new EventSource(url);
+    let source;
+    let closed = false;
     onStatus('connecting');
-    source.onopen = () => onStatus('live');
-    source.onmessage = (message) => {
-      try { onEvent(JSON.parse(message.data)); } catch { /* ignore malformed frames */ }
-    };
-    // CLOSED means the gateway refused the stream; otherwise it is retrying.
-    source.onerror = () => onStatus(source.readyState === EventSource.CLOSED ? 'closed' : 'reconnecting');
-    return () => source.close();
+    consoleReady.then(() => {
+      if (closed) return;
+      source = new EventSource(url, { withCredentials: true });
+      source.onopen = () => onStatus('live');
+      source.onmessage = (message) => {
+        try { onEvent(JSON.parse(message.data)); } catch { /* ignore malformed frames */ }
+      };
+      source.onerror = () => onStatus(source.readyState === EventSource.CLOSED ? 'closed' : 'reconnecting');
+    }).catch(() => { if (!closed) onStatus('closed'); });
+    return () => { closed = true; source?.close(); };
   },
 };

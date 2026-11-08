@@ -54,6 +54,8 @@ export function run(argv: string[], io: Io): number {
     let parsed; try { parsed = parse(argv); } catch (error) { throw new CliError('USAGE', (error as Error).message, 'agentree --help'); }
     const { values, positionals } = parsed; json = !!values.json;
     if (values.help || !positionals.length || positionals[0] === 'help') { io.out(HELP); return 0; }
+    if (io.env.HARNESS_SESSION_ID || io.env.HARNESS_SESSION_TOKEN)
+      throw new DomainError('DENY', 'Managed sessions must use the session-bound Gateway or MCP client');
     const home = new Home(agentreeHome(io.env)); home.ensure(); const dbPath = values.db ?? home.dbPath;
     const humanId = io.env.AGENTREE_USER ?? userInfo().username;
     let gw = new Gateway(dbPath, { type: 'human', id: humanId });
