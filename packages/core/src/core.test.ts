@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AgentreeService } from './index.js';
+import { PendingTreeService } from './index.js';
 import { DomainError, type FileRef, type WorkInput } from '../../contracts/src/index.js';
 import { SqliteStore } from '../../storage/src/index.js';
 
 function fixture() {
   const store = new SqliteStore(':memory:');
-  const human = new AgentreeService(store, { type: 'human', id: 'human' });
+  const human = new PendingTreeService(store, { type: 'human', id: 'human' });
   const workspace = human.createWorkspace('test', [{ id: 'repo', path: '/tmp/repo' }]);
   const alice = human.createBranch(workspace.id, 'alice');
   const bob = human.createBranch(workspace.id, 'bob');
@@ -14,8 +14,8 @@ function fixture() {
   const aSession = human.registerSession(alice.id, { id: 'a', name: 'Alice' }, 'codex', 'a-native');
   const bSession = human.registerSession(bob.id, { id: 'b', name: 'Bob' }, 'claude', 'b-native');
   return { store, human, workspace, alice, bob, other,
-    a: new AgentreeService(store, { type: 'agent', sessionId: aSession.id }),
-    b: new AgentreeService(store, { type: 'agent', sessionId: bSession.id }) };
+    a: new PendingTreeService(store, { type: 'agent', sessionId: aSession.id }),
+    b: new PendingTreeService(store, { type: 'agent', sessionId: bSession.id }) };
 }
 const file = (path: string): FileRef => ({ rootId: 'repo', path });
 const code = (wanted: string) => (error: unknown) => error instanceof DomainError && error.code === wanted;
@@ -182,13 +182,13 @@ test('invalid file roots and traversal are rejected; failed batch acceptance cha
 test('declared files and native activity share canonical identity across nested workspace roots', () => {
   const store = new SqliteStore(':memory:');
   try {
-    const human = new AgentreeService(store,{type:'human',id:'reviewer'});
+    const human = new PendingTreeService(store,{type:'human',id:'reviewer'});
     const workspace = human.createWorkspace('nested',[{id:'repo',path:'/tmp/repo'},{id:'lib',path:'/tmp/repo/packages/lib'}]);
     const a = human.createBranch(workspace.id,'declared');
     const b = human.createBranch(workspace.id,'observed');
     const sa = human.registerSession(a.id,{id:'a',name:'A'},'claude-code','a');
     const sb = human.registerSession(b.id,{id:'b',name:'B'},'codex','b');
-    const author = new AgentreeService(store,{type:'agent',sessionId:sa.id});
+    const author = new PendingTreeService(store,{type:'agent',sessionId:sa.id});
     const proposal = author.proposeWork(a.id,{body:'Change library API',files:[{rootId:'repo',path:'packages/lib/api.ts'}]});
     assert.deepEqual(proposal.files,[{rootId:'lib',path:'api.ts'}]);
     human.ingest({id:'nested-observation',workspaceId:workspace.id,sessionId:sb.id,source:'codex',nativeId:'nested-observation',
@@ -203,7 +203,7 @@ test('declared files and native activity share canonical identity across nested 
 function writer(f: ReturnType<typeof fixture>) {
   const sessions = f.store.list<{ id: string; branchId: string }>('session');
   let n = 0;
-  const as = (svc: AgentreeService, branchId: string, path: string, access: 'read' | 'write') => {
+  const as = (svc: PendingTreeService, branchId: string, path: string, access: 'read' | 'write') => {
     const session = sessions.find(s => s.branchId === branchId)!;
     n += 1;
     svc.ingest({ id: `w-${n}`, workspaceId: f.workspace.id, source: 'native', nativeId: `w-${n}`, sessionId: session.id, type: 'file.changed',

@@ -1,6 +1,6 @@
 # Core
 
-`AgentreeService` owns workspace access, Main revisions/history, branch work, conflict evidence, human merge decisions, corrections, session observations, and policy audit. `ApplicationService` is its public interface type.
+`PendingTreeService` owns workspace access, Main revisions/history, branch work, conflict evidence, human merge decisions, corrections, session observations, and policy audit. `ApplicationService` is its public interface type.
 
 Actors come from trusted host authentication. An agent reads its workspace and proposes on its own session branch; human authority is required for Main writes, acceptance, conflict decisions, and corrections.
 

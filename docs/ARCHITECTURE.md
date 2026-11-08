@@ -1,6 +1,6 @@
 # Architecture
 
-Agentree supervises independent native agents. Humans own Main and acceptance decisions, native runtimes own planning and execution, and Git owns source control. Human-submitted task dispatch forwards explicit instructions to a supported runner; it does not add autonomous planning or recovery.
+PendingTree supervises independent native agents. Humans own Main and acceptance decisions, native runtimes own planning and execution, and Git owns source control. Human-submitted task dispatch forwards explicit instructions to a supported runner; it does not add autonomous planning or recovery.
 
 ## Domain model
 
@@ -8,7 +8,7 @@ Agentree supervises independent native agents. Humans own Main and acceptance de
 
 **Branches** are logical work records, independent of Git branches and filesystems. Multiple native sessions can continue one branch. Work proposals contain text, optional intent, affected files, event evidence, and explicit references to incompatible Main entries. Proposed, accepted, and rejected work remains visible.
 
-**Conflicts** have status `potential`, `confirmed`, `resolved`, or `dismissed`. Rooted file overlap, explicit Main incompatibility, and human reports provide evidence. File overlap starts as potential; matching prose is not semantic detection. The human Gateway view adds bounded, live checkout evidence for referenced files: Git status and diff against HEAD, recent commits, and the current file's size, modified time, and hash. This describes the shared checkout and is not attributed to a logical Agentree branch. Humans supply explanations for assessments. New evidence updates the same signal without reopening its human disposition.
+**Conflicts** have status `potential`, `confirmed`, `resolved`, or `dismissed`. Rooted file overlap, explicit Main incompatibility, and human reports provide evidence. File overlap starts as potential; matching prose is not semantic detection. The human Gateway view adds bounded, live checkout evidence for referenced files: Git status and diff against HEAD, recent commits, and the current file's size, modified time, and hash. This describes the shared checkout and is not attributed to a logical PendingTree branch. Humans supply explanations for assessments. New evidence updates the same signal without reopening its human disposition.
 
 **Merge decisions** accept or reject selected pending work in one atomic human operation. Acceptance creates Main entries with source-work links. Rejection leaves Main unchanged. Acceptance neither replaces an existing Main entry nor resolves conflicts automatically; humans reconcile the shared reference explicitly.
 
@@ -36,6 +36,6 @@ Events retain native identity, source, session, payload, and observed/controlled
 
 File evidence uses structured Claude inputs, Codex changes, and normalized touches. Read-only touches are excluded. Known roots and normalized relative paths determine identity, using the longest matching root when roots nest. No filesystem scan, Git diff parser, command-string inference, or source merge engine is involved. The overview shows the latest 30 session events; overlap detection uses the branch sessions' full observed write history and pending proposals.
 
-Native control depends on the configured integration. See the [enforcement matrix](NATIVE_AGENTS.md#supported-controls). Passive observation cannot deliver corrections, and MCP cannot push unsolicited guidance into arbitrary sessions. Tool denial reasons can reach supported intercepted calls. Agentree adds no autonomous retry or conflict resolution.
+Native control depends on the configured integration. See the [enforcement matrix](NATIVE_AGENTS.md#supported-controls). Passive observation cannot deliver corrections, and MCP cannot push unsolicited guidance into arbitrary sessions. Tool denial reasons can reach supported intercepted calls. PendingTree adds no autonomous retry or conflict resolution.
 
 See [migration](MIGRATION.md) for retained historical entities and removed protocols.

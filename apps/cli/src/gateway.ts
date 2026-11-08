@@ -1,12 +1,12 @@
 // CLI access to shared state. Writes go through the authorized Core service.
 import type { Actor, Session, Workspace } from '../../../packages/contracts/src/index.js';
-import { AgentreeService } from '../../../packages/core/src/index.js';
+import { PendingTreeService } from '../../../packages/core/src/index.js';
 import { SqliteStore } from '../../../packages/storage/src/index.js';
 
 export class Gateway {
   readonly store: SqliteStore;
-  readonly service: AgentreeService;
-  constructor(dbPath: string, readonly actor: Actor) { this.store = new SqliteStore(dbPath); this.service = new AgentreeService(this.store, actor); }
+  readonly service: PendingTreeService;
+  constructor(dbPath: string, readonly actor: Actor) { this.store = new SqliteStore(dbPath); this.service = new PendingTreeService(this.store, actor); }
   close() { this.store.close(); }
   workspaces(): Workspace[] {
     const all = this.store.list<Workspace>('workspace');

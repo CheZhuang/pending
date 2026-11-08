@@ -1,6 +1,6 @@
-# Agentree
+# PendingTree
 
-Agentree is a local supervision layer for independent Claude Code and Codex agents. It gives humans a shared reference, visibility into native activity, and a way to assess conflicting work and send corrections. Native agents keep control of their own planning and execution.
+PendingTree is a local supervision layer for independent Claude Code and Codex agents. It gives humans a shared reference, visibility into native activity, and a way to assess conflicting work and send corrections. Native agents keep control of their own planning and execution.
 
 ## How it works
 
@@ -19,8 +19,8 @@ Use **Node.js 24+** and npm. Run these commands from the repository root:
 npm ci
 npm ci --prefix apps/web
 npm run build
-npm run agentree
-# Or npm link once, then: agentree
+npm run pendingtree
+# Or npm link once, then: pendingtree
 ```
 
 This starts or connects to the local Gateway and opens `http://127.0.0.1:8787` with a one-use Console launch ticket.
@@ -32,16 +32,16 @@ GATEWAY_CONSOLE_ORIGINS=http://localhost:5173 npm run dev
 # In another terminal:
 npm --prefix apps/web run dev:live
 # Then:
-AGENTREE_CONSOLE_URL='http://localhost:5173/?api=live' npm run agentree
+PENDINGTREE_CONSOLE_URL='http://localhost:5173/?api=live' npm run pendingtree
 ```
 
-Development origins are disabled by default. Reopen through `agentree` after a Gateway restart or when Console access expires.
+Development origins are disabled by default. Reopen through `pendingtree` after a Gateway restart or when Console access expires.
 
 Create a workspace and an initial expectation from the CLI, using an absolute project path:
 
 ```sh
-npm run agentree -- init my-project --root project=/absolute/path/to/project
-npm run agentree -- main add "Keep the public API backward compatible."
+npm run pendingtree -- init my-project --root project=/absolute/path/to/project
+npm run pendingtree -- main add "Keep the public API backward compatible."
 ```
 
 Then [launch Claude Code or Codex](docs/NATIVE_AGENTS.md). Managed launchers can also create a workspace and branch from the project directory. Use the Console's Main, Branches, Conflicts, Activity, and Approvals pages to supervise the session.
@@ -54,11 +54,11 @@ For a standalone Console preview, use `npm --prefix apps/web run dev` and open `
 
 | Setting | Default / purpose |
 | --- | --- |
-| `GATEWAY_DATA_DIR` | `~/.local/share/agentree`; Gateway database (AGENTREE_HOME takes precedence) |
+| `GATEWAY_DATA_DIR` | `~/.local/share/pendingtree`; Gateway database (PENDINGTREE_HOME takes precedence) |
 | `PORT` | `8787`; Gateway binds to `127.0.0.1` |
-| `AGENTREE_NO_OPEN` | Set to `1` to print the Console URL without opening a browser |
+| `PENDINGTREE_NO_OPEN` | Set to `1` to print the Console URL without opening a browser |
 | `GATEWAY_CONSOLE_ORIGINS` | Comma-separated loopback Console origins; disabled by default |
-| `AGENTREE_CONSOLE_URL` | Optional loopback Console URL opened by the launcher for Vite development |
+| `PENDINGTREE_CONSOLE_URL` | Optional loopback Console URL opened by the launcher for Vite development |
 | `VITE_GATEWAY_URL` | Console build/dev setting; same origin in builds, `http://localhost:8787` in Vite |
 
 Keep the data directory and credentials private. Use the same data directory for the Gateway, CLI, and native launchers. The CLI has [additional state overrides](apps/cli/README.md). Native hosts need local access to the Gateway SQLite database for MCP.

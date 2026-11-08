@@ -23,7 +23,7 @@ const provider: ProcessProvider = { enumerate: async () => {
 } };
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'agentree-process-discovery-'));
+  directory = await mkdtemp(join(tmpdir(), 'pendingtree-process-discovery-'));
   database = join(directory, 'gateway.sqlite');
   gateway = createGateway({ database, processProvider: provider, discoveryIntervalMs: 60_000 });
   await new Promise<void>(resolve => gateway.server.listen(0, '127.0.0.1', resolve));

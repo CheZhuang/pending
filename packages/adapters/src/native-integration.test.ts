@@ -9,7 +9,7 @@ import { observeClaudeHook } from './claude-observer.js';
 import { gatewayCodexApproval } from './codex-managed.js';
 
 test('native connection binds Claude hook identity and deduplicates hook retries', async () => {
-  const directory=await mkdtemp(join(tmpdir(),'agentree-native-test-'));
+  const directory=await mkdtemp(join(tmpdir(),'pendingtree-native-test-'));
   const gateway=createGateway({database:join(directory,'gateway.sqlite')});
   try {
     await new Promise<void>(resolve=>gateway.server.listen(0,'127.0.0.1',resolve));
@@ -36,6 +36,6 @@ test('Codex approval callback is bound to its registered thread', async () => {
   assert.deepEqual(wrong,{decision:'decline'});
   const correct=await gatewayCodexApproval(fake,{method:'item/commandExecution/requestApproval',params:{threadId:'trusted-thread',turnId:'turn',itemId:'item'}},'/tmp');
   assert.deepEqual(correct,{decision:'accept'});
-  const mcp=await gatewayCodexApproval(fake,{method:'mcpServer/elicitation/request',params:{threadId:'trusted-thread',turnId:'turn',serverName:'agentree',message:'Allow the agentree MCP server to run tool "context_publish"?',_meta:{codex_approval_kind:'mcp_tool_call',tool_params:{key:'x'}}}},'/tmp');
+  const mcp=await gatewayCodexApproval(fake,{method:'mcpServer/elicitation/request',params:{threadId:'trusted-thread',turnId:'turn',serverName:'pendingtree',message:'Allow the pendingtree MCP server to run tool "context_publish"?',_meta:{codex_approval_kind:'mcp_tool_call',tool_params:{key:'x'}}}},'/tmp');
   assert.deepEqual(mcp,{action:'accept',content:{}});
 });

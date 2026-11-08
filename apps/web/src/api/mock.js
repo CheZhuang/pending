@@ -125,7 +125,7 @@ export function createMock({ speed = 1, discoveryScenario = 'default', noWorkspa
   observe(sessions[0], 'tool.result', { tool: 'Edit', output: 'Updated token expiry validation' });
   observe(sessions[1], 'item/completed', { method: 'item/completed', params: { item: { type: 'fileChange', changes: [{ path: `${ROOT}/src/api/errors.ts`, kind: 'update' }] } } });
 
-  // Same rule as AgentreeService.acceptanceWarnings: open conflicts on the branch that
+  // Same rule as PendingTreeService.acceptanceWarnings: open conflicts on the branch that
   // involve this work (by evidence id or shared file, or any when there is no evidence),
   // and current Main entries sharing a file. Read-model only, never stored on the work.
   const sameFile = (a, b) => a.rootId === b.rootId && a.path === b.path;

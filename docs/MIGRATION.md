@@ -1,5 +1,15 @@
 # SQLite migration and compatibility
 
+## PendingTree rename
+
+The application is now PendingTree. Use `pendingtree` (or `npm run pendingtree`), the `PENDINGTREE_*` environment variables, and the `@pendingtree/*` package names. Source integrations use `PendingTreeService`, `createPendingTreeMcpServer`, and `servePendingTreeMcp`. The MCP server/configuration key and tool prefix are now `pendingtree` and `mcp__pendingtree__`; sync envelopes use `pendingtree.supervision-delta`.
+
+The default data directory is now `~/.local/share/pendingtree`. To keep using an existing installation's database, CLI selection, and credentials, stop the old Gateway and managed sessions, then set `PENDINGTREE_HOME` to that installation's data directory before restarting. `GATEWAY_DATA_DIR` and `--db` remain supported. Codex adapter state defaults separately to `~/.local/share/pendingtree/native`, independent of `PENDINGTREE_HOME`; integrations that need the previous adapter state directory must pass it explicitly as `ManagedCodex.open({ stateDirectory, ... })`. Standalone Codex journals also use the new default directory. Relaunch managed sessions to obtain the renamed MCP configuration. The rename does not modify the database schema or rewrite existing records.
+
+Update launch scripts and environment settings to the new names, rebuild, and relaunch managed native sessions to regenerate MCP configuration. Browser preferences use new storage keys; run `pendingtree` again to obtain a new Console ticket and cookie. Existing Console sessions and old launch URLs are not reused.
+
+See below for database schema migrations.
+
 `SqliteStore` migrates automatically when opening the database. Back up the database before upgrading. Migrations are transactional and there is no schema downgrade path.
 
 ## Schema version 3

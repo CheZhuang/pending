@@ -1,21 +1,21 @@
-// Human-facing CLI for workspace supervision. All writes use AgentreeService.
+// Human-facing CLI for workspace supervision. All writes use PendingTreeService.
 import { basename } from 'node:path';
 import { userInfo } from 'node:os';
 import { parseArgs } from 'node:util';
 import { DomainError, type Actor, type Branch, type Session, type Workspace, type FileRef } from '../../../packages/contracts/src/index.js';
 import { clip, eventSummary, short, table, time } from './format.js';
 import { Gateway } from './gateway.js';
-import { agentreeHome, Home } from './home.js';
+import { pendingtreeHome, Home } from './home.js';
 
 export interface Io { out(text: string): void; err(text: string): void; env: NodeJS.ProcessEnv; cwd: string; }
 export class CliError extends Error { constructor(readonly code: string, message: string, readonly hint?: string) { super(message); } }
 const EXIT: Record<string, number> = { USAGE: 2, AMBIGUOUS: 2, DENY: 3, IDENTITY: 3, NOT_FOUND: 4, STALE: 5, STATE: 5, REVISION: 5, CONFLICT: 5 };
-const HINTS: Record<string, string> = { DENY: 'This operation is not allowed for the current identity.', IDENTITY: 'Run this human governance command without --as <session>.', STALE: 'Main changed. Refresh the branch or Main view and retry.', NOT_FOUND: 'List current records with agentree status.' };
-export const HELP = `agentree — supervision for independent coding agents
+const HINTS: Record<string, string> = { DENY: 'This operation is not allowed for the current identity.', IDENTITY: 'Run this human governance command without --as <session>.', STALE: 'Main changed. Refresh the branch or Main view and retry.', NOT_FOUND: 'List current records with pendingtree status.' };
+export const HELP = `pendingtree — supervision for independent coding agents
 
-Run agentree with no arguments to start the Gateway and open the Console.
+Run pendingtree with no arguments to start the Gateway and open the Console.
 
-Usage: agentree <command> [options]  (global: --json --workspace <name|id> --db <path> --as <session>)
+Usage: pendingtree <command> [options]  (global: --json --workspace <name|id> --db <path> --as <session>)
 
 Workspace and native activity
   init <name> [--root id=path ...]       create and select a workspace
@@ -37,7 +37,7 @@ Supervision (all writes are human authorized)
   correction send <branch> <body>
   merge list
 
-State uses $AGENTREE_HOME, else $GATEWAY_DATA_DIR, else ~/.local/share/agentree. IDs accept unique prefixes.`;
+State uses $PENDINGTREE_HOME, else $GATEWAY_DATA_DIR, else ~/.local/share/pendingtree. IDs accept unique prefixes.`;
 const OPTIONS = {
   json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, db: { type: 'string' }, workspace: { type: 'string', short: 'w' }, as: { type: 'string' },
   root: { type: 'string', multiple: true }, agent: { type: 'string' }, name: { type: 'string' }, runtime: { type: 'string' }, native: { type: 'string' },
@@ -51,13 +51,13 @@ interface Ctx { io: Io; json: boolean; values: Values; pos: string[]; home: Home
 export function run(argv: string[], io: Io): number {
   let ctx: Ctx | undefined; let json = argv.includes('--json');
   try {
-    let parsed; try { parsed = parse(argv); } catch (error) { throw new CliError('USAGE', (error as Error).message, 'agentree --help'); }
+    let parsed; try { parsed = parse(argv); } catch (error) { throw new CliError('USAGE', (error as Error).message, 'pendingtree --help'); }
     const { values, positionals } = parsed; json = !!values.json;
     if (values.help || !positionals.length || positionals[0] === 'help') { io.out(HELP); return 0; }
     if (io.env.HARNESS_SESSION_ID || io.env.HARNESS_SESSION_TOKEN)
       throw new DomainError('DENY', 'Managed sessions must use the session-bound Gateway or MCP client');
-    const home = new Home(agentreeHome(io.env)); home.ensure(); const dbPath = values.db ?? home.dbPath;
-    const humanId = io.env.AGENTREE_USER ?? userInfo().username;
+    const home = new Home(pendingtreeHome(io.env)); home.ensure(); const dbPath = values.db ?? home.dbPath;
+    const humanId = io.env.PENDINGTREE_USER ?? userInfo().username;
     let gw = new Gateway(dbPath, { type: 'human', id: humanId });
     if (values.as) {
       const s = pickOne(gw.store.list<Session>('session'), values.as, 'session', (x) => [x.id, x.nativeId]); gw.close();
@@ -72,16 +72,16 @@ function report(io: Io, json: boolean, error: unknown): number {
   return EXIT[code] ?? 1;
 }
 function emit(ctx: Ctx, data: unknown, text: () => string) { ctx.io.out(ctx.json ? JSON.stringify({ ok: true, data }, null, 2) : text()); }
-function need(value: string | undefined, usage: string) { if (!value) throw new CliError('USAGE', `Missing argument. Usage: agentree ${usage}`); return value; }
+function need(value: string | undefined, usage: string) { if (!value) throw new CliError('USAGE', `Missing argument. Usage: pendingtree ${usage}`); return value; }
 function pickOne<T>(items: T[], input: string, label: string, keys: (item: T) => string[]): T {
   const exact = items.filter((item) => keys(item).includes(input)); if (exact.length === 1) return exact[0];
   const prefix = items.filter((item) => keys(item).some((k) => k.startsWith(input))); if (prefix.length === 1) return prefix[0];
   if (!prefix.length) throw new CliError('NOT_FOUND', `No ${label} matches "${input}"`); throw new CliError('AMBIGUOUS', `"${input}" matches ${prefix.length} ${label}s; use a longer id`);
 }
 function ws(ctx: Ctx): Workspace {
-  const all = ctx.gw.workspaces(); const selected = ctx.values.workspace ?? ctx.io.env.AGENTREE_WORKSPACE ?? ctx.home.config().currentWorkspaceId;
+  const all = ctx.gw.workspaces(); const selected = ctx.values.workspace ?? ctx.io.env.PENDINGTREE_WORKSPACE ?? ctx.home.config().currentWorkspaceId;
   if (selected) return pickOne(all, selected, 'workspace', (w) => [w.id, w.name]); if (all.length === 1) return all[0];
-  throw new CliError('USAGE', all.length ? 'No workspace selected' : 'No workspace yet', all.length ? 'agentree workspace use <name>' : 'agentree init <name>');
+  throw new CliError('USAGE', all.length ? 'No workspace selected' : 'No workspace yet', all.length ? 'pendingtree workspace use <name>' : 'pendingtree init <name>');
 }
 const branch = (ctx: Ctx, w: Workspace, id: string): Branch => pickOne(ctx.gw.service.branches(w.id), id, 'branch', (b) => [b.id, b.name]);
 const session = (ctx: Ctx, w: Workspace, id: string): Session => pickOne(ctx.gw.sessions(w.id), id, 'session', (s) => [s.id, s.nativeId]);
@@ -101,7 +101,7 @@ function dispatch(ctx: Ctx) {
   if (cmd === 'correction') return correctionCmd(ctx);
   if (cmd === 'merge') return mergeCmd(ctx);
   if (cmd === 'context') return branchShow(ctx, need(sub, 'context <branch>'));
-  throw new CliError('USAGE', `Unknown command "${cmd}"`, 'agentree --help');
+  throw new CliError('USAGE', `Unknown command "${cmd}"`, 'pendingtree --help');
 }
 function init(ctx: Ctx) {
   const name = need(ctx.pos[1], 'init <name> [--root id=path ...]');
@@ -154,7 +154,7 @@ function workCmd(ctx: Ctx, sub: string) {
   const w = ws(ctx); const b = branch(ctx, w, need(ctx.pos[2], `work ${sub} <branch> [work-id...]`)); const overview = ctx.gw.service.branchOverview(b.id);
   if (sub === 'list') return emit(ctx, overview.work, () => table(['state', 'id', 'work'], overview.work.map((x) => [x.state, short(x.id), clip(x.body, 100)])));
   if (sub === 'accept' || sub === 'reject') {
-    const ids = ctx.pos.slice(3).map((id) => pickOne(overview.work, id, 'work item', (x) => [x.id]).id); if (!ids.length) throw new CliError('USAGE', `Usage: agentree work ${sub} <branch> <work-id...>`);
+    const ids = ctx.pos.slice(3).map((id) => pickOne(overview.work, id, 'work item', (x) => [x.id]).id); if (!ids.length) throw new CliError('USAGE', `Usage: pendingtree work ${sub} <branch> <work-id...>`);
     const revision = ctx.gw.service.main(w.id).revision; const result = ctx.gw.service.decideMerge(b.id, ids, sub === 'accept' ? 'accepted' : 'rejected', revision, !!ctx.values['override-conflicts']);
     return emit(ctx, result, () => `${sub === 'accept' ? 'Accepted into Main' : 'Rejected'} ${ids.length} work item(s); Main revision ${result.mainRevision}`);
   }
@@ -166,10 +166,10 @@ function conflictCmd(ctx: Ctx, sub: string) {
   throw new CliError('USAGE', `Unknown conflict command ${sub}`);
 }
 function correctionCmd(ctx: Ctx) {
-  if (ctx.pos[1] !== 'send') throw new CliError('USAGE', 'Usage: agentree correction send <branch> <body>');
+  if (ctx.pos[1] !== 'send') throw new CliError('USAGE', 'Usage: pendingtree correction send <branch> <body>');
   const w = ws(ctx); const b = branch(ctx, w, need(ctx.pos[2], 'correction send <branch> <body>')); const correction = ctx.gw.service.sendCorrection(b.id, need(ctx.pos.slice(3).join(' '), 'correction send <branch> <body>')); return emit(ctx, correction, () => `Correction sent to ${b.name} (${short(correction.id)})`);
 }
 function mergeCmd(ctx: Ctx) {
-  if (ctx.pos[1] !== undefined && ctx.pos[1] !== 'list') throw new CliError('USAGE', 'Usage: agentree merge list');
+  if (ctx.pos[1] !== undefined && ctx.pos[1] !== 'list') throw new CliError('USAGE', 'Usage: pendingtree merge list');
   const w = ws(ctx); const merges = ctx.gw.service.merges(w.id); return emit(ctx, merges, () => table(['state', 'id', 'branch', 'work items', 'Main revision'], merges.map((m) => [m.state, short(m.id), ctx.gw.service.branches(w.id).find((b) => b.id === m.sourceBranchId)?.name ?? short(m.sourceBranchId), m.workIds.length, m.mainRevision])));
 }

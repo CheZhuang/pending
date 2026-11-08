@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { ensureLocalHumanToken, localHumanHeaders, readLocalHumanToken } from './local-auth.js';
 
 test('human capability is owner-only, persistent, and read without following symlinks', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'agentree-local-auth-'));
+  const directory = await mkdtemp(join(tmpdir(), 'pendingtree-local-auth-'));
   const database = join(directory, 'gateway.sqlite');
   try {
     const first = ensureLocalHumanToken(database);
@@ -36,7 +36,7 @@ test('human capability is owner-only, persistent, and read without following sym
 });
 
 test('managed session environment cannot read human capability; headers require loopback HTTP', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'agentree-local-auth-'));
+  const directory = await mkdtemp(join(tmpdir(), 'pendingtree-local-auth-'));
   const database = join(directory, 'gateway.sqlite');
   const previousId = process.env.HARNESS_SESSION_ID;
   const previousToken = process.env.HARNESS_SESSION_TOKEN;
@@ -60,7 +60,7 @@ test('managed session environment cannot read human capability; headers require 
 
 
 test('Windows capability ACL is private and rejects a grant to Everyone', {skip:process.platform !== 'win32'}, async () => {
-  const directory=await mkdtemp(join(tmpdir(),"agentree-acl-quoted-'[path]-"));
+  const directory=await mkdtemp(join(tmpdir(),"pendingtree-acl-quoted-'[path]-"));
   const database=join(directory,'gateway.sqlite');
   try {
     const token=ensureLocalHumanToken(database);
@@ -71,7 +71,7 @@ test('Windows capability ACL is private and rejects a grant to Everyone', {skip:
 $ErrorActionPreference = 'Stop'
 # Exercise ACL tampering without requiring PowerShell security-module autoload.
 $PSModuleAutoLoadingPreference = 'None'
-$path = $env:AGENTREE_TEST_CAPABILITY_PATH
+$path = $env:PENDINGTREE_TEST_CAPABILITY_PATH
 $stream = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open,
   [System.Security.AccessControl.FileSystemRights]::FullControl,
   [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::None)
@@ -84,7 +84,7 @@ try {
   $rules = $stream.GetAccessControl().GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
   if ($rules.IdentityReference.Value -notcontains 'S-1-1-0') { throw 'Everyone grant was not applied' }
 } finally { $stream.Dispose() }
-`], {env:{...process.env,AGENTREE_TEST_CAPABILITY_PATH:`${database}.human-token`},timeout:30_000,windowsHide:true,stdio:'pipe'});
+`], {env:{...process.env,PENDINGTREE_TEST_CAPABILITY_PATH:`${database}.human-token`},timeout:30_000,windowsHide:true,stdio:'pipe'});
     assert.throws(()=>readLocalHumanToken(database),/Windows ACL validation failed/);
     assert.throws(()=>ensureLocalHumanToken(database),/Windows ACL validation failed/);
   } finally {await rm(directory,{recursive:true,force:true});}
@@ -92,7 +92,7 @@ try {
 
 
 test('malformed capability content is refused without replacing the file', async () => {
-  const directory=await mkdtemp(join(tmpdir(),'agentree-invalid-capability-'));
+  const directory=await mkdtemp(join(tmpdir(),'pendingtree-invalid-capability-'));
   const database=join(directory,'gateway.sqlite');
   try {
     ensureLocalHumanToken(database);

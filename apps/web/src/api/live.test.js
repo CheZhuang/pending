@@ -39,7 +39,7 @@ test('launcher fragment ticket is erased before exchange and later requests; SSE
   const priorFetch = globalThis.fetch;
   const calls = [];
   const fakeWindow = {
-    location: { hash: '#agentree-ticket=one-use-secret', pathname: '/', search: '?mode=live' },
+    location: { hash: '#pendingtree-ticket=one-use-secret', pathname: '/', search: '?mode=live' },
     history: { replaceState(_state, _title, path) { fakeWindow.location.hash = ''; fakeWindow.erasedPath = path; } },
   };
   globalThis.window = fakeWindow;

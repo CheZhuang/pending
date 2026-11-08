@@ -12,7 +12,7 @@ let gateway: ReturnType<typeof createGateway>;
 let baseUrl: string;
 let human: string;
 
-before(async () => { directory = await mkdtemp(join(tmpdir(), 'agentree-security-')); database = join(directory, 'gateway.sqlite'); await start(); });
+before(async () => { directory = await mkdtemp(join(tmpdir(), 'pendingtree-security-')); database = join(directory, 'gateway.sqlite'); await start(); });
 after(async () => { await gateway.close(); await rm(directory, { recursive: true, force: true }); });
 
 test('anonymous writes cannot mutate Main, approvals, conflicts, tasks, or registrations', async () => {

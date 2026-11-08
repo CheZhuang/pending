@@ -1,4 +1,4 @@
-// Real two-agent Agentree supervision scenario on the running gateway, so every
+// Real two-agent PendingTree supervision scenario on the running gateway, so every
 // step shows up live in the web console:
 //   Codex (managed, owns src/api) and Claude Code (owns src/auth) work in one
 //   project on separate logical branches. The human writes Main, dispatches tasks
@@ -6,7 +6,7 @@
 //   Main, sends a correction, and stops a session.
 //
 // Cost guard: Claude runs on the cheapest tier (`haiku` by default) with a small
-// --max-turns and only the Agentree MCP server; Codex refuses to start unless
+// --max-turns and only the PendingTree MCP server; Codex refuses to start unless
 // CODEX_MODEL names a model explicitly, runs with low reasoning effort and no other
 // MCP servers. The project is three tiny files and every prompt forbids exploring.
 //
@@ -24,12 +24,12 @@ import { localHumanHeaders } from '../packages/adapters/src/local-auth.js';
 const args = process.argv.slice(2);
 const has = (flag: string) => args.includes(flag);
 const CHECK = has('--check');
-const MANUAL = has('--manual'); // also approve Agentree MCP calls by hand
+const MANUAL = has('--manual'); // also approve PendingTree MCP calls by hand
 
-const dataDir = process.env.AGENTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree');
+const dataDir = process.env.PENDINGTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'pendingtree');
 const gatewayUrl = process.env.HARNESS_GATEWAY_URL || 'http://127.0.0.1:8787';
 const database = join(dataDir, 'gateway.sqlite');
-const playground = resolve(process.env.PLAYGROUND || join(homedir(), 'agentree-two-agents'));
+const playground = resolve(process.env.PLAYGROUND || join(homedir(), 'pendingtree-two-agents'));
 const claudeModel = process.env.CLAUDE_MODEL || 'haiku';
 const codexModel = process.env.CODEX_MODEL || '';
 const claudeCommand = process.env.CLAUDE_COMMAND || 'claude';
@@ -61,7 +61,7 @@ async function preflight(): Promise<void> {
   say(`  gateway   ${gatewayUrl}  (data ${dataDir})`);
   say(`  project   ${playground}`);
   say(`  models    Claude: ${claudeModel} (max 12 turns) · Codex: ${codexModel || '(not set)'} (reasoning effort low)`);
-  say(`  approvals ${MANUAL ? 'all by hand in the console' : 'Agentree MCP calls auto-approved by this script; every other tool call by hand'}`);
+  say(`  approvals ${MANUAL ? 'all by hand in the console' : 'PendingTree MCP calls auto-approved by this script; every other tool call by hand'}`);
   if (problems.length) fail(`Not ready:\n  - ${problems.join('\n  - ')}`);
   say('  ✔ ready');
 }
@@ -97,13 +97,13 @@ type Approval = { id: string; state: string; tool: string; input: unknown };
 type Task = { id: string; status: string; nativeTurnId?: string; reason?: string };
 type Overview = { work: Array<{ id: string; sessionId: string; state: string; body: string }>; corrections: unknown[] };
 
-/** Approves only Agentree MCP calls (collaboration plumbing); everything else waits for the human. */
+/** Approves only PendingTree MCP calls (collaboration plumbing); everything else waits for the human. */
 function startApprovalHelper(): () => void {
   const told = new Set<string>();
   const timer = setInterval(() => { void (async () => {
     for (const a of (await api<Approval[]>('/v1/approvals')).filter((x) => x.state === 'pending')) {
-      if (!MANUAL && a.tool.startsWith('mcp__agentree__')) {
-        await api(`/v1/approvals/${a.id}`, { decision: 'approved', reason: 'demo helper: Agentree MCP call' }).catch(() => undefined);
+      if (!MANUAL && a.tool.startsWith('mcp__pendingtree__')) {
+        await api(`/v1/approvals/${a.id}`, { decision: 'approved', reason: 'demo helper: PendingTree MCP call' }).catch(() => undefined);
       } else if (!told.has(a.id)) {
         told.add(a.id);
         human(`Approvals → allow or deny within 60 s: ${a.tool} ${JSON.stringify(a.input).slice(0, 90)}`);
@@ -192,13 +192,13 @@ try {
   say('  2 Main entries recorded (see the Main page and its history).');
 
   step(3, 'The human dispatches a task to Codex; delivery follows native evidence');
-  await dispatch(codexSession.id, `You own src/api. Edit src/api/users.ts so getUser returns { error: { code: "unauthorized", message } } instead of throwing. Then call the agentree tool work_propose with a one-sentence body and files [{"rootId":"${root}","path":"src/api/users.ts"},{"rootId":"${root}","path":"src/auth/token.ts"}] (you rely on verifyToken). Reply DONE. ${RULES}`);
+  await dispatch(codexSession.id, `You own src/api. Edit src/api/users.ts so getUser returns { error: { code: "unauthorized", message } } instead of throwing. Then call the pendingtree tool work_propose with a one-sentence body and files [{"rootId":"${root}","path":"src/api/users.ts"},{"rootId":"${root}","path":"src/auth/token.ts"}] (you rely on verifyToken). Reply DONE. ${RULES}`);
 
   step(4, 'Claude Code joins (branch "Claude", owns src/auth), reads Main, works, and tries a forbidden push');
-  say('  Every Claude tool call waits for the console; Agentree MCP calls are auto-approved by this script.');
+  say('  Every Claude tool call waits for the console; PendingTree MCP calls are auto-approved by this script.');
   const code = await runManagedClaude({
     cwd: playground, label: 'Claude', gatewayUrl, databasePath: database, command: claudeCommand,
-    args: ['-p', `You own src/auth. 1) Call the agentree tool context_get and read Main and any corrections. 2) Edit src/auth/token.ts so verifyToken also rejects expired tokens, following Main. 3) Call the agentree tool work_propose with a one-sentence body and files [{"rootId":"${root}","path":"src/auth/token.ts"}]. 4) Run the Bash command: git push --force . Reply DONE. ${RULES}`,
+    args: ['-p', `You own src/auth. 1) Call the pendingtree tool context_get and read Main and any corrections. 2) Edit src/auth/token.ts so verifyToken also rejects expired tokens, following Main. 3) Call the pendingtree tool work_propose with a one-sentence body and files [{"rootId":"${root}","path":"src/auth/token.ts"}]. 4) Run the Bash command: git push --force . Reply DONE. ${RULES}`,
       '--model', claudeModel, '--max-turns', '12', '--strict-mcp-config'],
   });
   if (code !== 0) say(`  (Claude exited with ${code})`);
@@ -226,7 +226,7 @@ try {
   });
 
   step(6, 'Follow-up task: Codex retrieves the correction and the updated Main');
-  const followUp = await dispatch(codexSession.id, 'Call the agentree tool context_sync with requestId "codex-final", then context_acknowledge with the item ids you received. Reply with one sentence: the correction you received and the current token expiry rule in Main. Do not edit files. ' + RULES);
+  const followUp = await dispatch(codexSession.id, 'Call the pendingtree tool context_sync with requestId "codex-final", then context_acknowledge with the item ids you received. Reply with one sentence: the correction you received and the current token expiry rule in Main. Do not edit files. ' + RULES);
   say(`  follow-up task ${followUp.status}; its native evidence is on the Tasks page.`);
 
   step(7, 'Stop the run');
@@ -234,7 +234,7 @@ try {
     const s = await api<{ state: string }>(`/v1/sessions/${codexSession.id}`);
     return s.state !== 'active' && s.state;
   });
-  say('\nDone. Review Main history (/main/history), Tasks, and: npm run agentree -- log --audit');
+  say('\nDone. Review Main history (/main/history), Tasks, and: npm run pendingtree -- log --audit');
 } finally {
   stopHelper();
   await codex?.close().catch(() => undefined);

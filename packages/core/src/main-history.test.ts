@@ -3,14 +3,14 @@ import test from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentreeService } from './index.js';
+import { PendingTreeService } from './index.js';
 import { DomainError } from '../../contracts/src/index.js';
 import { SqliteStore } from '../../storage/src/index.js';
 
 function fixture() {
   const store = new SqliteStore(':memory:');
-  const human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
-  const restorer = new AgentreeService(store, { type: 'human', id: 'restorer' });
+  const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
+  const restorer = new PendingTreeService(store, { type: 'human', id: 'restorer' });
   const workspace = human.createWorkspace('history', [{ id: 'repo', path: '/tmp/repo' }]);
   const other = human.createWorkspace('other');
   const a = human.editMain(workspace.id, { body: 'first', files: [{ rootId: 'repo', path: 'a.ts' }] }, 0);
@@ -84,15 +84,15 @@ test('history rejects stale, invalid, future, and cross-workspace requests', () 
 });
 
 test('agents cannot remove or restore Main and an empty restore is a durable immutable global history event', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'agentree-empty-restore-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pendingtree-empty-restore-'));
   const path = join(directory, 'history.sqlite');
   let store = new SqliteStore(path);
   try {
-    const human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     const workspace = human.createWorkspace('empty');
     const branch = human.createBranch(workspace.id, 'agent-branch');
     const session = human.registerSession(branch.id, { id: 'agent', name: 'Agent' }, 'native', 'native-session');
-    const agent = new AgentreeService(store, { type: 'agent', sessionId: session.id });
+    const agent = new PendingTreeService(store, { type: 'agent', sessionId: session.id });
     const emptyRestore = human.restoreMain(workspace.id, 0, 0);
     assert.equal(emptyRestore.revision, 1);
     assert.deepEqual(emptyRestore.entries, []);
@@ -112,7 +112,7 @@ test('agents cannot remove or restore Main and an empty restore is a durable imm
     assert.equal(session.workspaceId, workspace.id);
     store.close();
     store = new SqliteStore(path);
-    const restartedHuman = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const restartedHuman = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     assert.deepEqual(restartedHuman.mainHistory(workspace.id)[0], marker, 'empty restoration marker survives restart unchanged');
     assert.deepEqual(restartedHuman.mainHistory(workspace.id).map(r => r.revision), [1, 2, 3]);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -139,11 +139,11 @@ test('a storage failure during whole restoration rolls back every entry and the 
 test('restoration preserves source work provenance and records the restoring human as actor', () => {
   const store = new SqliteStore(':memory:');
   try {
-    const human = new AgentreeService(store, { type: 'human', id: 'human-reviewer' });
+    const human = new PendingTreeService(store, { type: 'human', id: 'human-reviewer' });
     const workspace = human.createWorkspace('provenance');
     const branch = human.createBranch(workspace.id, 'author');
     const session = human.registerSession(branch.id, { id: 'agent', name: 'Agent' }, 'native', 'session');
-    const agent = new AgentreeService(store, { type: 'agent', sessionId: session.id });
+    const agent = new PendingTreeService(store, { type: 'agent', sessionId: session.id });
     const proposal = agent.proposeWork(branch.id, { body: 'accepted source' });
     human.decideMerge(branch.id, [proposal.id], 'accepted', 0);
     const acceptedEntry = human.main(workspace.id).entries[0]!;
@@ -158,10 +158,10 @@ test('restoration preserves source work provenance and records the restoring hum
 });
 
 test('restored and historical Main versions survive a database restart unchanged', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'agentree-main-history-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pendingtree-main-history-'));
   const path = join(directory, 'history.sqlite');
   let store = new SqliteStore(path);
-  let human = new AgentreeService(store, { type: 'human', id: 'durable-reviewer' });
+  let human = new PendingTreeService(store, { type: 'human', id: 'durable-reviewer' });
   const workspace = human.createWorkspace('durable');
   const entry = human.editMain(workspace.id, { body: 'original' }, 0);
   human.editMain(workspace.id, { body: 'newer' }, 1, entry.id);
@@ -169,7 +169,7 @@ test('restored and historical Main versions survive a database restart unchanged
   store.close();
   try {
     store = new SqliteStore(path);
-    human = new AgentreeService(store, { type: 'human', id: 'durable-reviewer' });
+    human = new PendingTreeService(store, { type: 'human', id: 'durable-reviewer' });
     assert.equal(human.main(workspace.id).revision, 3);
     assert.equal(human.main(workspace.id).entries[0]?.body, 'original');
     assert.deepEqual(human.mainHistory(workspace.id, entry.id).map(e => [e.revision, e.body]), [[1, 'original'], [2, 'newer'], [3, 'original']]);
@@ -179,15 +179,15 @@ test('restored and historical Main versions survive a database restart unchanged
 });
 
 test('independent SQLite connections reject a stale Main writer', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'agentree-main-writers-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pendingtree-main-writers-'));
   const path = join(directory, 'history.sqlite');
   const firstStore = new SqliteStore(path);
   let secondStore: SqliteStore | undefined;
   try {
-    const first = new AgentreeService(firstStore, { type: 'human', id: 'reviewer' });
+    const first = new PendingTreeService(firstStore, { type: 'human', id: 'reviewer' });
     const workspace = first.createWorkspace('writers');
     secondStore = new SqliteStore(path);
-    const second = new AgentreeService(secondStore, { type: 'human', id: 'reviewer' });
+    const second = new PendingTreeService(secondStore, { type: 'human', id: 'reviewer' });
     first.editMain(workspace.id, { body: 'committed by writer one' }, 0);
     assert.throws(() => second.editMain(workspace.id, { body: 'stale writer two' }, 0), code('STALE'));
     assert.deepEqual(second.main(workspace.id).entries.map(e => e.body), ['committed by writer one']);

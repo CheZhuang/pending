@@ -331,7 +331,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
 
   private static async initialize(rpc: StdioJsonRpc, options: CodexAppServerOptions): Promise<void> {
     await rpc.request('initialize', {
-      clientInfo: options.clientInfo ?? { name: 'agentree', title: 'Agentree', version: '0.1.0' },
+      clientInfo: options.clientInfo ?? { name: 'pendingtree', title: 'PendingTree', version: '0.1.0' },
     });
     rpc.notify('initialized');
   }

@@ -13,7 +13,7 @@ let gateway: ReturnType<typeof createGateway>;
 let baseUrl: string;
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'agentree-gateway-test-'));
+  directory = await mkdtemp(join(tmpdir(), 'pendingtree-gateway-test-'));
   database = join(directory, 'gateway.sqlite');
   gateway = createGateway({ database, approvalTimeoutMs: 1200 });
   baseUrl = await listen(gateway.server);

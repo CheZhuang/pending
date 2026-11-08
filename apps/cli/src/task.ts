@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { localHumanHeaders } from '../../../packages/adapters/src/local-auth.js';
 
-const help = `Submit and inspect tasks for a managed Agentree session.
+const help = `Submit and inspect tasks for a managed PendingTree session.
 
 Usage:
   npm run task -- submit --session <session-id> --instructions <text> [--include-main] [--request-id <id>]
@@ -17,7 +17,7 @@ const parsed = parseArgs({ args: process.argv.slice(2), options: {
 const [action, target] = parsed.positionals;
 if (parsed.values.help || !action) { console.log(help); process.exit(parsed.values.help ? 0 : 2); }
 
-const gateway = parsed.values.gateway ?? process.env.AGENTREE_GATEWAY_URL ?? 'http://127.0.0.1:8787';
+const gateway = parsed.values.gateway ?? process.env.PENDINGTREE_GATEWAY_URL ?? 'http://127.0.0.1:8787';
 const request = async (path: string, method = 'GET', body?: unknown) => {
   const response = await fetch(new URL(path, gateway), { method, redirect:'error', headers: { ...localHumanHeaders(gateway), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const result = await response.json().catch(() => null) as unknown;

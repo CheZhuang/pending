@@ -2,18 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { AgentreeService } from '../../core/src/index.js';
+import { PendingTreeService } from '../../core/src/index.js';
 import { SqliteStore } from '../../storage/src/index.js';
 import { EntityLedger, type ContextDelta } from '../../sync/src/index.js';
-import { createAgentreeMcpServer } from './index.js';
+import { createPendingTreeMcpServer } from './index.js';
 
 function fixture() {
-  const store = new SqliteStore(':memory:'); const human = new AgentreeService(store, { type: 'human', id: 'admin' });
+  const store = new SqliteStore(':memory:'); const human = new PendingTreeService(store, { type: 'human', id: 'admin' });
   const workspace = human.createWorkspace('mcp', [{ id: 'root', path: '/project' }]); const a = human.createBranch(workspace.id, 'a'); const b = human.createBranch(workspace.id, 'b');
   const session = human.registerSession(a.id, { id: 'a', name: 'A' }, 'mock', 'a'); const peerSession = human.registerSession(b.id, { id: 'b', name: 'B' }, 'mock', 'b');
-  const service = new AgentreeService(store, { type: 'agent', sessionId: session.id }); let authorized = true;
+  const service = new PendingTreeService(store, { type: 'agent', sessionId: session.id }); let authorized = true;
   const connect = async () => {
-    const server = createAgentreeMcpServer({ session, service, ledger: new EntityLedger(store), authorize: async () => { if (!authorized) throw new Error('session credential expired'); } });
+    const server = createPendingTreeMcpServer({ session, service, ledger: new EntityLedger(store), authorize: async () => { if (!authorized) throw new Error('session credential expired'); } });
     const client = new Client({ name: 'test', version: '1' }); const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
     return { client, async call(name: string, args: Record<string, unknown> = {}) { const r = await client.callTool({ name, arguments: args }); return { result: r, data: (r.structuredContent as { data?: unknown })?.data }; }, async close() { await client.close(); await server.close(); } };
   };

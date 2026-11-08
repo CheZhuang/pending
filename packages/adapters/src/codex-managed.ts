@@ -24,12 +24,12 @@ export interface ManagedCodexOptions {
 export async function gatewayCodexApproval(client:NativeGatewayClient,request:{method:string;params?:unknown},cwd:string) {
   if(request.method==='mcpServer/elicitation/request') {
     const p=request.params as {threadId?:string;turnId?:string;serverName?:string;message?:string;_meta?:{codex_approval_kind?:string;tool_params?:unknown}}|undefined;
-    if(p?.threadId!==client.session.nativeId||!p.turnId||p.serverName!=='agentree'||p._meta?.codex_approval_kind!=='mcp_tool_call')return {action:'decline'};
+    if(p?.threadId!==client.session.nativeId||!p.turnId||p.serverName!=='pendingtree'||p._meta?.codex_approval_kind!=='mcp_tool_call')return {action:'decline'};
     const toolName=/run tool "([a-z_]+)"\?/.exec(p.message??'')?.[1];
     if(!toolName)return {action:'decline'};
     const hash=createHash('sha256').update(JSON.stringify([p.turnId,toolName,p._meta.tool_params])).digest('hex');
     try {
-      const decision=await client.decide(`codex:mcp:${p.threadId}:${hash}`,`mcp__agentree__${toolName}`,p._meta.tool_params,cwd);
+      const decision=await client.decide(`codex:mcp:${p.threadId}:${hash}`,`mcp__pendingtree__${toolName}`,p._meta.tool_params,cwd);
       return decision.outcome==='allow'?{action:'accept',content:{}}:{action:'decline'};
     }catch{return {action:'decline'};}
   }
@@ -63,7 +63,7 @@ export class ManagedCodex {
   ) {}
   static async open(options:ManagedCodexOptions):Promise<ManagedCodex> {
     const cwd=resolve(options.cwd);
-    const directory=resolve(options.stateDirectory??join(homedir(),'.local','share','agentree','native'));
+    const directory=resolve(options.stateDirectory??join(homedir(),'.local','share','pendingtree','native'));
     mkdirSync(directory,{recursive:true,mode:0o700});
     const store=new SqliteStore(join(directory,'adapter-state.sqlite'));
     const cursors=new SqliteCursorStore(store);
@@ -109,7 +109,7 @@ export class ManagedCodex {
       }
       const mcp=nativeMcpConfig(resolve(options.databasePath),gateway.connection);
       const args=options.adapter?.args??['app-server','--listen','stdio://'];
-      const configured=[...args,'-c',`mcp_servers.agentree.command=${JSON.stringify(mcp.command)}`,'-c',`mcp_servers.agentree.args=${JSON.stringify(mcp.args)}`,'-c',`mcp_servers.agentree.env_vars=${JSON.stringify(Object.keys(mcp.env))}`];
+      const configured=[...args,'-c',`mcp_servers.pendingtree.command=${JSON.stringify(mcp.command)}`,'-c',`mcp_servers.pendingtree.args=${JSON.stringify(mcp.args)}`,'-c',`mcp_servers.pendingtree.env_vars=${JSON.stringify(Object.keys(mcp.env))}`];
       adapter=await CodexAppServerAdapter.resume(gateway.session.nativeId,{...options.adapter,cwd,args:configured,env:{...process.env,...options.adapter?.env,...mcp.env},threadResumeParams:{...options.adapter?.threadResumeParams,approvalPolicy:options.adapter?.threadStartParams?.approvalPolicy??'untrusted',sandbox:options.adapter?.threadStartParams?.sandbox??'workspace-write'},journalPath:journalPath??join(directory,`${gateway.session.nativeId}.events.json`),initialCursor:await cursors.get(cursorKey(binding)),onServerRequest:request=>gatewayCodexApproval(gateway!,request,cwd)});
       const result=new ManagedCodex(adapter,gateway,registrationFile,store,cursors,binding);
       if (adapter.processId) void gateway.bindProcess(adapter.processId).catch(() => undefined);
@@ -179,7 +179,7 @@ export class ManagedCodex {
     for(const item of pending){
       try{
         if(!this.notifiedCorrections.has(item.itemId)){
-          const prompt=`A new human correction for this Agentree branch has arrived. Follow it as current human direction, reconsider affected work, and acknowledge its item ID with Agentree context_acknowledge after reading it.\n\n${item.value.body}\n\nCorrection item ID: ${item.itemId}`;
+          const prompt=`A new human correction for this PendingTree branch has arrived. Follow it as current human direction, reconsider affected work, and acknowledge its item ID with PendingTree context_acknowledge after reading it.\n\n${item.value.body}\n\nCorrection item ID: ${item.itemId}`;
           if(this.activeTurnId) await this.adapter.steerTurn(this.activeTurnId,prompt);
           else {
             const started=await this.adapter.startTurn(prompt) as {turn?:{id?:string}};
@@ -192,7 +192,7 @@ export class ManagedCodex {
       }catch(error){
         // Keep the correction pending in Gateway so a later polling tick can
         // retry if the App Server cannot steer the active turn right now.
-        console.error(`[Agentree] Could not deliver correction ${item.itemId}: ${error instanceof Error?error.message:String(error)}`);
+        console.error(`[PendingTree] Could not deliver correction ${item.itemId}: ${error instanceof Error?error.message:String(error)}`);
       }
     }
   }

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
-import { AgentreeService } from '../packages/core/src/index.js';
+import { PendingTreeService } from '../packages/core/src/index.js';
 import { DomainError, workInputSchema, type Correction, type Session, type Workspace } from '../packages/contracts/src/index.js';
 import { TaskDispatch } from './task-dispatch.js';
 import { ContextSync } from '../packages/sync/src/engine.js';
@@ -44,7 +44,7 @@ export function createGateway(options: GatewayOptions) {
     const consoleTickets = new Map<string, number>();
     const consoleSessions = new Map<string, number>();
     const store = new SqliteStore(options.database);
-    const admin = new AgentreeService(store, { type: 'human', id: 'local-admin' });
+    const admin = new PendingTreeService(store, { type: 'human', id: 'local-admin' });
     store.db.exec(`CREATE TABLE IF NOT EXISTS gateway_credentials (hash TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
     CREATE TABLE IF NOT EXISTS gateway_sessions (session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS gateway_exit_reports (session_id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -70,7 +70,7 @@ export function createGateway(options: GatewayOptions) {
         const bound = store.get<Session>(sessionId, 'session');
         if (bound) audit('correction.delivery-state', { changes }, bound.workspaceId, sessionId);
     }));
-    const withConflictEvidence = async (workspaceId: string, conflicts: ReturnType<AgentreeService['conflicts']>, includeEvidence: boolean) => {
+    const withConflictEvidence = async (workspaceId: string, conflicts: ReturnType<PendingTreeService['conflicts']>, includeEvidence: boolean) => {
         if (!includeEvidence) return conflicts;
         const workspace = store.get<Workspace>(workspaceId, 'workspace');
         if (!workspace) return conflicts;
@@ -177,7 +177,7 @@ export function createGateway(options: GatewayOptions) {
                 res.end();
                 return;
             }
-            if (path === '/health' && method === 'GET') return send({ status: 'ok', application: 'agentree', database: resolve(options.database) });
+            if (path === '/health' && method === 'GET') return send({ status: 'ok', application: 'pendingtree', database: resolve(options.database) });
             const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '';
             // A ticket is a short-lived, one-use capability passed in a launcher URL
             // fragment. No GET or ordinary anonymous request can mint one.
@@ -190,11 +190,11 @@ export function createGateway(options: GatewayOptions) {
                 if (!deadline || deadline <= Date.now()) return send({error:{code:'UNAUTHORIZED',message:'Invalid or expired Console ticket'}},401);
                 const cookie = randomBytes(32).toString('hex');
                 consoleSessions.set(digest(cookie), Date.now() + 12 * 60 * 60 * 1000);
-                res.setHeader('Set-Cookie', `agentree_console=${cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+                res.setHeader('Set-Cookie', `pendingtree_console=${cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
                 return send({ok:true});
             }
             const credential = token ? store.db.prepare('SELECT session_id FROM gateway_credentials WHERE hash=?').get(digest(token)) : undefined;
-            const cookie = req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('agentree_console='))?.slice('agentree_console='.length);
+            const cookie = req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('pendingtree_console='))?.slice('pendingtree_console='.length);
             const isAdmin = req.headers.authorization !== undefined ? !!token && digest(token) === humanHash
                 : !!cookie && (consoleSessions.get(digest(cookie)) ?? 0) > Date.now();
             if (path.startsWith('/v1/') && !isAdmin && !credential)
@@ -202,7 +202,7 @@ export function createGateway(options: GatewayOptions) {
             const sid = credential ? String(credential.session_id) : undefined;
             if (sid && !(/^\/v1\/sessions\/[^/]+\/end$/.test(path) || path === '/v1/stream'))
                 active(sid);
-            const svc = sid ? new AgentreeService(store, { type: 'agent', sessionId: sid }) : admin;
+            const svc = sid ? new PendingTreeService(store, { type: 'agent', sessionId: sid }) : admin;
             const human = () => {
                 if (!isAdmin)
                     throw new DomainError('DENY', 'Human admin credential required');

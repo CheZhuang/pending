@@ -9,7 +9,7 @@ export interface StoredEvent {
   nativeId: string;
 }
 
-/** Synchronous SQLite persistence for Agentree's normalized records. */
+/** Synchronous SQLite persistence for PendingTree's normalized records. */
 export class SqliteStore {
   public readonly db: DatabaseSync;
 

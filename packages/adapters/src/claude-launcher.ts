@@ -144,7 +144,7 @@ export interface ClaudeLaunchOptions {
 export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<number> {
   const cwd = resolve(options.cwd ?? process.cwd());
   const gatewayUrl = options.gatewayUrl ?? 'http://localhost:8787';
-  const gateway = options.gateway ?? new HttpManagedClaudeGateway(gatewayUrl, options.databasePath ?? process.env.AGENTREE_DATABASE_PATH);
+  const gateway = options.gateway ?? new HttpManagedClaudeGateway(gatewayUrl, options.databasePath ?? process.env.PENDINGTREE_DATABASE_PATH);
   // Fail before launching Claude if the Gateway cannot register the session.
   const nativeId=randomUUID();
   const session = await gateway.registerSession({ runtime: 'claude-code', cwd, label: options.label, nativeId, branchId:options.branchId });
@@ -158,7 +158,7 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
   let onSigint: (() => void) | undefined;
   let onSigterm: (() => void) | undefined;
   try {
-    settingsDir = await mkdtemp(join(tmpdir(), 'agentree-claude-'));
+    settingsDir = await mkdtemp(join(tmpdir(), 'pendingtree-claude-'));
     const settingsPath = join(settingsDir, 'settings.json');
     const hookScriptPath = options.hookScriptPath ?? defaultHookScriptPath();
     const tsxLoader = hookScriptPath.endsWith('.ts') ? ` --import ${shellQuote(import.meta.resolve('tsx'))}` : '';
@@ -166,8 +166,8 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     await writeFile(settingsPath, JSON.stringify(createClaudeHookSettings(hookCommand)), { mode: 0o600 });
 
     const mcpPath=join(settingsDir,'mcp.json');
-    const database=options.databasePath??process.env.AGENTREE_DATABASE_PATH??join(process.env.AGENTREE_HOME??process.env.GATEWAY_DATA_DIR??join(homedir(),'.local','share','agentree'),'gateway.sqlite');
-    await writeFile(mcpPath,JSON.stringify({mcpServers:{agentree:nativeMcpConfig(database,{gatewayUrl,sessionId:session.sessionId,sessionToken:session.sessionToken??''})}}),{mode:0o600});
+    const database=options.databasePath??process.env.PENDINGTREE_DATABASE_PATH??join(process.env.PENDINGTREE_HOME??process.env.GATEWAY_DATA_DIR??join(homedir(),'.local','share','pendingtree'),'gateway.sqlite');
+    await writeFile(mcpPath,JSON.stringify({mcpServers:{pendingtree:nativeMcpConfig(database,{gatewayUrl,sessionId:session.sessionId,sessionToken:session.sessionToken??''})}}),{mode:0o600});
     const claudeArgs = options.args ?? [];
     if(claudeArgs.some(arg=>/^--(settings|session-id|resume|continue|mcp-config)(=|$)/.test(arg)||arg==='-r'||arg==='-c')) throw new Error('Managed Claude owns native identity and configuration; start a fresh session');
     if (claudeArgs.includes('--settings')) throw new Error('Managed Claude owns --settings for its hook configuration');

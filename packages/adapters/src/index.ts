@@ -17,7 +17,7 @@ export interface NativeSession {
 }
 
 export interface SessionBinding extends NativeSession {
-  /** Agentree identity supplied by the trusted daemon, never by the model. */
+  /** PendingTree identity supplied by the trusted daemon, never by the model. */
   sessionId: string;
   workspaceId: string;
   branchId: string;

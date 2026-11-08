@@ -4,16 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { Session } from '../../contracts/src/index.js';
-import { AgentreeService } from '../../core/src/index.js';
+import { PendingTreeService } from '../../core/src/index.js';
 import { SqliteStore } from '../../storage/src/index.js';
 import { ContextSync, EntityLedger } from './index.js';
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'agentree-sync-')); const store = new SqliteStore(join(dir, 'agentree.sqlite'));
-  const human = new AgentreeService(store, { type: 'human', id: 'reviewer' }); const workspace = human.createWorkspace('demo', [{ id: 'app', path: '/repo' }]);
+  const dir = mkdtempSync(join(tmpdir(), 'pendingtree-sync-')); const store = new SqliteStore(join(dir, 'pendingtree.sqlite'));
+  const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' }); const workspace = human.createWorkspace('demo', [{ id: 'app', path: '/repo' }]);
   const a = human.createBranch(workspace.id, 'a'); const b = human.createBranch(workspace.id, 'b');
   const sa = human.registerSession(a.id, { id: 'a', name: 'A' }, 'claude', 'a'); const sb = human.registerSession(b.id, { id: 'b', name: 'B' }, 'codex', 'b');
-  const agent = (s: Session) => new AgentreeService(store, { type: 'agent', sessionId: s.id });
+  const agent = (s: Session) => new PendingTreeService(store, { type: 'agent', sessionId: s.id });
   const sync = (s: Session) => new ContextSync(agent(s), new EntityLedger(store));
   return { dir, store, human, workspace, a, b, sa, sb, aa: agent(sa), ab: agent(sb), sync, close: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
@@ -61,7 +61,7 @@ test('legacy context delivery ledgers are left archival and cannot replay stale 
     f.store.put('sync_ledger:legacy-session', 'sync_ledger', {
       id: 'sync_ledger:legacy-session', sessionId: 'legacy-session',
       items: { old: { itemId: 'old', authority: 'finding', state: 'pending', attempts: 1, firstSeenAt: 'yesterday' } },
-      lastPull: { requestId: 'old-request', delta: { kind: 'agentree.context-delta', obsolete: true } },
+      lastPull: { requestId: 'old-request', delta: { kind: 'pendingtree.context-delta', obsolete: true } },
     });
     const ledger = new EntityLedger(f.store);
     assert.deepEqual(ledger.load('legacy-session'), { sessionId: 'legacy-session', items: {} });

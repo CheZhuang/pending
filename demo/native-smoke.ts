@@ -8,9 +8,9 @@ import { localHumanHeaders } from '../packages/adapters/src/local-auth.js';
 
 const runtime=process.argv[2];
 if(runtime!=='codex'&&runtime!=='claude')throw new Error('Usage: npm run smoke:native -- codex|claude');
-const directory=mkdtempSync(join(tmpdir(),'agentree-native-smoke-'));
+const directory=mkdtempSync(join(tmpdir(),'pendingtree-native-smoke-'));
 const database=join(directory,'gateway.sqlite');
-writeFileSync(join(directory,'smoke.txt'),'AGENTREE_NATIVE_SMOKE\n');
+writeFileSync(join(directory,'smoke.txt'),'PENDINGTREE_NATIVE_SMOKE\n');
 const gateway=createGateway({database,approvalTimeoutMs:15000});
 await new Promise<void>(resolve=>gateway.server.listen(0,'127.0.0.1',resolve));
 const address=gateway.server.address();if(!address||typeof address==='string')throw new Error('No Gateway socket');
@@ -26,12 +26,12 @@ const reviews=setInterval(()=>{void (async()=>{
    const command=Array.isArray(approval.input.command)?approval.input.command.join(' '):approval.input.command??'';
    const readOnly=(approval.tool==='Read'&&approval.input.file_path===join(directory,'smoke.txt'))||/^cat (?:\.\/)?smoke\.txt$/.test(command)||/ -[lc]+ cat smoke\.txt$/.test(command);
    // MCP collaboration is separately authorized by its bound Core service.
-   const mcp=approval.tool.startsWith('mcp__agentree__');
+   const mcp=approval.tool.startsWith('mcp__pendingtree__');
    await fetch(`${gatewayUrl}/v1/approvals/${approval.id}`,{method:'POST',headers,body:JSON.stringify({decision:readOnly||mcp?'approved':'denied',reason:'Native smoke fixture-only review'})});
  }
 })().catch(error=>process.stderr.write(`Smoke review: ${error instanceof Error?error.message:String(error)}\n`));},100);
 try {
- const prompt='Use the agentree MCP work_propose tool now. Propose work with body "AGENTREE_NATIVE_SMOKE" and no files. Then say SMOKE_OK. Do not use any other tools or modify files.';
+ const prompt='Use the pendingtree MCP work_propose tool now. Propose work with body "PENDINGTREE_NATIVE_SMOKE" and no files. Then say SMOKE_OK. Do not use any other tools or modify files.';
  let sessionId:string|undefined;
  if(runtime==='codex') {
   native=await ManagedCodex.open({gatewayUrl,databasePath:database,cwd:directory,stateDirectory:join(directory,'state'),adapter:{args:['app-server','--listen','stdio://','-c','mcp_servers={}'],threadStartParams:{approvalPolicy:'untrusted',sandbox:'read-only'}}});
@@ -63,7 +63,7 @@ try {
  if(!sessionId)throw new Error('Native session was not registered');
  const session=await (await fetch(`${gatewayUrl}/v1/sessions/${sessionId}`,{headers})).json() as {workspaceId:string;branchId:string};
  const snapshot=await (await fetch(`${gatewayUrl}/v1/branches/${session.branchId}/work`,{headers})).json() as {work:Array<{body:string;state:string}>};
- if(!snapshot.work.some(w=>w.body.includes('AGENTREE_NATIVE_SMOKE')&&w.state==='proposed'))throw new Error('Native agent did not propose work through MCP');
+ if(!snapshot.work.some(w=>w.body.includes('PENDINGTREE_NATIVE_SMOKE')&&w.state==='proposed'))throw new Error('Native agent did not propose work through MCP');
  const events=await (await fetch(`${gatewayUrl}/v1/workspaces/${session.workspaceId}/events?limit=1000`,{headers})).json() as {events:Array<{source:string;nativeId:string;sessionId?:string}>};
  const nativeEvents=events.events.filter(event=>event.sessionId===sessionId&&event.source.startsWith(runtime==='codex'?'codex-app-server:':'claude-code:'));
  if(nativeEvents.length===0)throw new Error('No native observations reached Gateway');
