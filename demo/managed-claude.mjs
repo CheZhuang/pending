@@ -6,9 +6,6 @@
 //
 //   cd ~/agentree-playground
 //   node /path/to/pending/demo/managed-claude.mjs --label "Claude A" [-- <claude args>]
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
 const split = argv.indexOf('--');
@@ -18,17 +15,6 @@ const flag = (name, fallback) => {
   const i = own.indexOf(`--${name}`);
   return i === -1 ? fallback : own[i + 1];
 };
-
-const dataDir = process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree');
-if (!process.env.HARNESS_ADMIN_TOKEN) {
-  try {
-    // The launcher needs the admin token to register the session; it strips it from Claude's environment.
-    process.env.HARNESS_ADMIN_TOKEN = readFileSync(join(dataDir, 'admin-token'), 'utf8').trim();
-  } catch {
-    console.error(`No admin token: start the gateway first (npm start), or set HARNESS_ADMIN_TOKEN. Looked in ${dataDir}/admin-token`);
-    process.exit(2);
-  }
-}
 
 let runManagedClaude;
 try {

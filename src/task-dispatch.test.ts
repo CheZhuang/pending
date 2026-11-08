@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { createServer } from 'node:http';
+import { startLocal } from '../apps/cli/src/start.js';
 import { createGateway } from './gateway.js';
 import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
 
@@ -11,9 +13,9 @@ const admin='task-test-admin-token-with-at-least-thirty-two-characters';
 test('human dispatch is durable, idempotent, session-bound, and reconciled from native turn evidence',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'agentree-dispatch-'));
   const database=join(dir,'db.sqlite');
-  let gateway=createGateway({database,adminToken:admin});
+  let gateway=createGateway({database});
   let url=await listen(gateway);
-  const call=(path:string,token:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${token}`,...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
+  const call=(path:string,token:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{...(token===admin?{}:{authorization:`Bearer ${token}`}),...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
   try{
     const codex=await (await call('/v1/sessions',admin,'POST',{runtime:'codex-app-server',cwd:dir,label:'Codex'})).json() as {sessionId:string;sessionToken:string;workspaceId:string;branchId:string};
     const claude=await (await call('/v1/sessions',admin,'POST',{runtime:'claude-code',cwd:dir,label:'Claude'})).json() as {sessionId:string;sessionToken:string};
@@ -50,7 +52,7 @@ test('human dispatch is durable, idempotent, session-bound, and reconciled from 
     const pending=await (await call('/v1/tasks',admin,'POST',{...input,requestId:'restart-1'})).json() as {id:string};
     await call('/v1/native/tasks/next',codex.sessionToken);
     await gateway.close();
-    gateway=createGateway({database,adminToken:admin});url=await listen(gateway);
+    gateway=createGateway({database});url=await listen(gateway);
     assert.equal((await (await call(`/v1/tasks/${pending.id}`,admin)).json() as {status:string}).status,'outcome-unknown');
   }finally{await gateway.close();await rm(dir,{recursive:true,force:true});}
 });
@@ -65,12 +67,12 @@ test('managed Codex runner consumes a human task through a fake App Server',asyn
   const dir=await mkdtemp(join(tmpdir(),'agentree-managed-dispatch-'));
   const script=join(dir,'fake.cjs');
   await writeFile(script,`const readline=require('node:readline');let n=0;const send=x=>console.log(JSON.stringify(x));readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.method)return;if(m.method==='thread/start'){send({id:m.id,result:{thread:{id:'fake-native-thread'}}});return}if(m.method==='thread/resume'){send({id:m.id,result:{}});return}if(m.method==='turn/start'){const id='turn-'+(++n);send({id:m.id,result:{turn:{id}}});send({method:'turn/started',params:{threadId:'fake-native-thread',turn:{id,status:'inProgress'}}});setTimeout(()=>send({method:'turn/completed',params:{threadId:'fake-native-thread',turn:{id,status:'completed'}}}),25);return}send({id:m.id,result:{}})});`);
-  const gateway=createGateway({database:join(dir,'db.sqlite'),adminToken:admin});
+  const gateway=createGateway({database:join(dir,'db.sqlite')});
   const url=await listen(gateway);
   let native:ManagedCodex|undefined;
   try{
-    native=await ManagedCodex.open({gatewayUrl:url,databasePath:join(dir,'db.sqlite'),cwd:dir,label:'fake Codex',adminToken:admin,stateDirectory:join(dir,'native'),adapter:{command:process.execPath,args:[script]}});
-    const request=(path:string,method='GET',body?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${admin}`,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+    native=await ManagedCodex.open({gatewayUrl:url,databasePath:join(dir,'db.sqlite'),cwd:dir,label:'fake Codex',stateDirectory:join(dir,'native'),adapter:{command:process.execPath,args:[script]}});
+    const request=(path:string,method='GET',body?:unknown)=>fetch(url+path,{method,headers:{...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
     const deadline=Date.now()+3000;
     await new Promise(r=>setTimeout(r,300));
     const result=await request('/v1/tasks','POST',{sessionId:native.binding.sessionId,instructions:'Inspect the project',requestId:'fake-runner-task'});
@@ -83,4 +85,43 @@ test('managed Codex runner consumes a human task through a fake App Server',asyn
     }
     assert.fail('Fake native turn did not complete through the dispatch path');
   }finally{await native?.close();await gateway.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('startLocal creates the daemon on first run and reuses its local database on repeated startup',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'agentree-start-local-'));
+  const previous={home:process.env.AGENTREE_HOME,port:process.env.PORT,noOpen:process.env.AGENTREE_NO_OPEN};
+  const reservation=createServer();
+  await new Promise<void>(resolve=>reservation.listen(0,'127.0.0.1',resolve));
+  const address=reservation.address();assert.ok(address&&typeof address!=='string');
+  const port=address.port;await new Promise<void>(resolve=>reservation.close(()=>resolve()));
+  process.env.AGENTREE_HOME=dir;process.env.PORT=String(port);process.env.AGENTREE_NO_OPEN='1';
+  try{
+    const first=await startLocal();
+    assert.equal(first,`http://127.0.0.1:${port}`);
+    assert.equal((await (await fetch(`${first}/health`)).json() as {application:string;database:string}).application,'agentree');
+    const second=await startLocal();
+    assert.equal(second,first);
+    process.env.AGENTREE_HOME=join(dir,'different-home');
+    await assert.rejects(startLocal(), /another service or Agentree data directory/);
+    process.env.AGENTREE_HOME=dir;
+    assert.equal((await fetch(`${second}/v1/workspaces`)).status,200);
+  }finally{
+    // startLocal deliberately detaches its daemon. Locate only the process
+    // carrying this test's unique AGENTREE_HOME and ask it to shut down.
+    if(process.platform==='linux'){
+      const fs=await import('node:fs/promises');
+      for(const entry of await fs.readdir('/proc')){
+        if(!/^\d+$/.test(entry))continue;
+        try{
+          const env=await fs.readFile(`/proc/${entry}/environ`,'utf8');
+          const cmd=await fs.readFile(`/proc/${entry}/cmdline`,'utf8');
+          if(env.split('\0').includes(`AGENTREE_HOME=${dir}`)&&cmd.includes('src/index.ts'))process.kill(Number(entry),'SIGTERM');
+        }catch{}
+      }
+    }
+    if(previous.home===undefined)delete process.env.AGENTREE_HOME;else process.env.AGENTREE_HOME=previous.home;
+    if(previous.port===undefined)delete process.env.PORT;else process.env.PORT=previous.port;
+    if(previous.noOpen===undefined)delete process.env.AGENTREE_NO_OPEN;else process.env.AGENTREE_NO_OPEN=previous.noOpen;
+    await rm(dir,{recursive:true,force:true});
+  }
 });

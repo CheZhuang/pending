@@ -8,8 +8,8 @@ export interface NativeConnection { gatewayUrl:string; sessionId:string; session
 /** Session credential is resolved by the runtime host, never by model arguments. */
 export class NativeGatewayClient {
   constructor(readonly connection:NativeConnection, readonly session:Session) {}
-  static async register(gatewayUrl:string, adminToken:string, request:RegisterManagedSessionRequest):Promise<NativeGatewayClient> {
-    const response=await fetch(new URL('/v1/sessions',gatewayUrl),{method:'POST',headers:{authorization:`Bearer ${adminToken}`,'content-type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(30000)});
+  static async register(gatewayUrl:string, request:RegisterManagedSessionRequest):Promise<NativeGatewayClient> {
+    const response=await fetch(new URL('/v1/sessions',gatewayUrl),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(request),signal:AbortSignal.timeout(30000)});
     if(!response.ok)throw new Error(`Gateway registration failed: HTTP ${response.status}`);
     const result=await response.json() as RegisterManagedSessionResponse;
     const session=sessionSchema.parse(result);

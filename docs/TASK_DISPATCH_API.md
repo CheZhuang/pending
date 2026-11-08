@@ -1,6 +1,6 @@
 # Native task dispatch API
 
-Humans submit explicit instructions to an active managed native session. Agentree records delivery evidence; the native runtime owns execution. Authentication and error envelopes follow the [Gateway API](GATEWAY_API.md). Human routes accept admin bearer or paired Console cookie; native runner routes require the target session credential. Credentials are never included in task records.
+Humans submit explicit instructions to an active managed native session. Agentree records delivery evidence; the native runtime owns execution. Authentication and error envelopes follow the [Gateway API](GATEWAY_API.md). Human routes use automatic local access; native runner routes require the target session credential. Credentials are never included in task records.
 
 ## Human routes
 

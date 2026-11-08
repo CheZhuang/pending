@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 
@@ -19,11 +16,9 @@ const parsed = parseArgs({ args: process.argv.slice(2), options: {
 const [action, target] = parsed.positionals;
 if (parsed.values.help || !action) { console.log(help); process.exit(parsed.values.help ? 0 : 2); }
 
-const dataDirectory = process.env.GATEWAY_DATA_DIR ?? join(homedir(), '.local', 'share', 'agentree');
-const adminToken = process.env.HARNESS_ADMIN_TOKEN ?? readFileSync(join(dataDirectory, 'admin-token'), 'utf8').trim();
 const gateway = parsed.values.gateway ?? process.env.AGENTREE_GATEWAY_URL ?? 'http://127.0.0.1:8787';
 const request = async (path: string, method = 'GET', body?: unknown) => {
-  const response = await fetch(new URL(path, gateway), { method, headers: { authorization: `Bearer ${adminToken}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(new URL(path, gateway), { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const result = await response.json().catch(() => null) as unknown;
   if (!response.ok) throw new Error(`Gateway returned HTTP ${response.status}: ${JSON.stringify(result)}`);
   console.log(JSON.stringify(result, null, 2));

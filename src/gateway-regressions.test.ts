@@ -14,7 +14,7 @@ let baseUrl: string;
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-gateway-regression-'));
-  gateway = createGateway({ database: join(directory, 'gateway.sqlite'), adminToken,
+  gateway = createGateway({ database: join(directory, 'gateway.sqlite'),
     consoleOrigins: [consoleOrigin] });
   baseUrl = await listen();
 });
@@ -41,7 +41,7 @@ test('decision requests are idempotent by request ID and payload', async () => {
   assert.equal(duplicateBody.approvalId, firstBody.approvalId);
 
   await gateway.close();
-  gateway=createGateway({database:join(directory,'gateway.sqlite'),adminToken,consoleOrigins:[consoleOrigin]});
+  gateway=createGateway({database:join(directory,'gateway.sqlite'),consoleOrigins:[consoleOrigin]});
   baseUrl=await listen();
   const terminalReplay = await api('/v1/decide', session.sessionToken, 'POST', payload);
   assert.equal(terminalReplay.status, 200);
@@ -86,47 +86,15 @@ test('kill request, exit report, and pending approvals are safe and separately a
   assert.ok(!types.includes('session.ended'));
 });
 
-test('Console cookie authentication enforces configured browser origins', async () => {
-  const session = await registerSession();
-  const options = await fetch(`${baseUrl}/v1/console/login`, {
-    method: 'OPTIONS', headers: { origin: consoleOrigin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization,content-type' },
-  });
-  assert.equal(options.status, 204);
-  assert.equal(options.headers.get('access-control-allow-origin'), consoleOrigin);
-
-  const login = await fetch(`${baseUrl}/v1/console/login`, {
-    method: 'POST', headers: { origin: consoleOrigin, authorization: `Bearer ${adminToken}` },
-  });
-  assert.equal(login.status, 200);
-  const cookie = login.headers.get('set-cookie');
-  assert.ok(cookie, 'login returns a Console session cookie');
-  const cookiePair = cookie.split(';', 1)[0]!;
-
-  const approvals = await fetch(`${baseUrl}/v1/approvals`, { headers: { cookie: cookiePair, origin: consoleOrigin } });
-  assert.equal(approvals.status, 200);
-  assert.ok(Array.isArray(await approvals.json()));
-
-  const cookiePost = await fetch(`${baseUrl}/v1/approvals/missing`, {
-    method: 'POST', headers: { cookie: cookiePair, origin: consoleOrigin, 'content-type': 'application/json' },
-    body: JSON.stringify({ decision: 'denied' }),
-  });
-  assert.equal(cookiePost.status, 404, 'valid cookie and matching origin reaches the admin route');
-
-  const noOriginWrite=await fetch(`${baseUrl}/v1/console/logout`,{method:'POST',headers:{cookie:cookiePair}});
-  assert.equal(noOriginWrite.status,403);
-  const stream=await fetch(`${baseUrl}/v1/stream`,{headers:{cookie:cookiePair,origin:consoleOrigin}});
-  assert.equal(stream.status,200);
-  await stream.body!.cancel();
-  const wrongOrigin = await fetch(`${baseUrl}/v1/approvals`, { headers: { cookie: cookiePair, origin: 'https://evil.example' } });
-  assert.equal(wrongOrigin.status, 403);
-  const bearerLogin = await fetch(`${baseUrl}/v1/console/login`, {
-    method: 'POST', headers: { origin: consoleOrigin, authorization: `Bearer ${session.sessionToken}` },
-  });
-  assert.equal(bearerLogin.status, 403, 'session bearer credentials cannot mint admin Console cookies');
-  const untrustedOrigin = await fetch(`${baseUrl}/v1/console/login`, {
-    method: 'POST', headers: { origin: 'https://evil.example', authorization: `Bearer ${adminToken}` },
-  });
-  assert.equal(untrustedOrigin.status, 403);
+test('local human routes require no bearer; an explicit legacy bearer is not admin authority', async () => {
+  const workspaces = await fetch(`${baseUrl}/v1/workspaces`);
+  assert.equal(workspaces.status, 200);
+  const legacyBearer = await fetch(`${baseUrl}/v1/workspaces`, { headers: { authorization: `Bearer ${adminToken}` } });
+  assert.equal(legacyBearer.status, 401);
+  const consoleOriginResponse = await fetch(`${baseUrl}/v1/workspaces`, { headers: { origin: consoleOrigin } });
+  assert.equal(consoleOriginResponse.status, 200);
+  const hostile = await fetch(`${baseUrl}/v1/workspaces`, { headers: { origin: 'https://evil.example' } });
+  assert.equal(hostile.status, 403);
 });
 
 async function listen(): Promise<string> {
@@ -145,7 +113,7 @@ async function registerSession() {
 async function api(path: string, token: string, method = 'GET', data?: unknown): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }

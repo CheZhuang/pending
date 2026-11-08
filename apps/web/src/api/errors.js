@@ -12,7 +12,7 @@ export class ApiError extends Error {
 }
 
 const HINTS = {
-  UNAUTHORIZED: 'Pair this browser with the admin token first.',
+  UNAUTHORIZED: 'The Gateway did not accept this request. Check its origin and access configuration.',
   DENY: 'The gateway refused this for the current credential. The refusal is in the audit log.',
   STATE: 'The record changed state on the server. The list has been refreshed.',
   STALE: 'Main changed since you opened this. Reload, review the latest reference, then retry.',

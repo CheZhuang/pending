@@ -19,6 +19,20 @@ test('history and preview reject an older Gateway that answers with the current 
   assert.equal((await live.mainRevisions('w')).length, 1);
 });
 
+test('live requests use same-origin paths without pairing credentials', async () => {
+  let request;
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await live.health();
+  assert.equal(request.url, '/health');
+  assert.equal('credentials' in request.options, false);
+  assert.equal(request.options.headers.authorization, undefined);
+  assert.equal(live.login, undefined);
+  assert.equal(live.logout, undefined);
+});
+
 test('restore on an older Gateway is reported as unsupported; real errors pass through with details', async () => {
   respond(400, { error: { code: 'BODY', message: 'Required' } });
   await assert.rejects(() => live.restoreMain('w', { revision: 1, expectedRevision: 7 }), { code: 'UNSUPPORTED' });

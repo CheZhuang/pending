@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
-import { resolve } from 'node:path';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { resolve, extname, sep } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
@@ -12,7 +13,7 @@ import { EntityLedger } from '../packages/sync/src/ledger.js';
 import { collectConflictEvidence } from './conflict-evidence.js';
 export interface GatewayOptions {
     database: string;
-    adminToken: string;
+    consoleDirectory?: string;
     approvalTimeoutMs?: number;
     consoleOrigins?: string[];
 }
@@ -34,8 +35,6 @@ function decodeMainSegment(value: string): string {
 }
 /** Local daemon boundary: HTTP input never supplies a Core actor. */
 export function createGateway(options: GatewayOptions) {
-    if (options.adminToken.length < 32)
-        throw new Error('Admin token must contain at least 32 characters');
     const store = new SqliteStore(options.database);
     const admin = new AgentreeService(store, { type: 'human', id: 'local-admin' });
     store.db.exec(`CREATE TABLE IF NOT EXISTS gateway_credentials (hash TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
@@ -44,11 +43,12 @@ export function createGateway(options: GatewayOptions) {
     CREATE TABLE IF NOT EXISTS gateway_approvals (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));
     CREATE INDEX IF NOT EXISTS gateway_pending_deadline ON gateway_approvals(json_extract(data,'$.state'),json_extract(data,'$.expiresAt'));`);
     const streams = new Set<ServerResponse>();
-    const browserSessions = new Map<string, {
-        origin: string;
-        expires: number;
-    }>();
     const allowedOrigins = new Set(options.consoleOrigins ?? []);
+    for (const origin of allowedOrigins) {
+        const parsed = new URL(origin);
+        if (parsed.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(parsed.hostname) || parsed.origin !== origin)
+            throw new Error('Console origins must be explicit loopback HTTP origins');
+    }
     store.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS gateway_request_identity ON gateway_approvals(json_extract(data,'$.sessionId'),json_extract(data,'$.requestId')) WHERE json_extract(data,'$.requestId') IS NOT NULL;`);
     const audit = (type: string, payload: unknown, workspaceId: string, sessionId?: string) => {
         const id = randomUUID();
@@ -131,18 +131,28 @@ export function createGateway(options: GatewayOptions) {
     }
     const server = createServer(async (req, res) => {
         const send = (data: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
         try {
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
             const method = req.method;
-            if (path === '/health' && method === 'GET')
-                return send({ status: 'ok' });
+            const address = server.address();
+            if (!address || typeof address === 'string' || !['127.0.0.1', '::1'].includes(address.address))
+                throw new DomainError('DENY', 'Gateway requires a loopback listener');
+            const hosts = new Set([`127.0.0.1:${address.port}`, `localhost:${address.port}`]);
+            if (!hosts.has(req.headers.host ?? '')) throw new DomainError('DENY', 'Invalid Gateway Host');
             const origin = req.headers.origin;
-            if (origin && !allowedOrigins.has(origin))
+            const sameOrigin = origin === `http://${req.headers.host}`;
+            if (origin && !sameOrigin && !allowedOrigins.has(origin))
                 throw new DomainError('DENY', 'Console origin is not allowed');
+            if (req.headers['sec-fetch-site'] === 'cross-site' && !origin)
+                throw new DomainError('DENY', 'Cross-site requests require an allowed Origin');
+            if (!origin && req.headers['sec-fetch-site'] && method !== 'GET' && method !== 'HEAD')
+                throw new DomainError('DENY', 'Browser writes require an Origin');
+            if (path === '/health' && method === 'GET') return send({ status: 'ok', application: 'agentree', database: resolve(options.database) });
             if (origin) {
                 res.setHeader('Access-Control-Allow-Origin', origin);
-                res.setHeader('Access-Control-Allow-Credentials', 'true');
                 res.setHeader('Vary', 'Origin');
             }
             if (method === 'OPTIONS' && origin) {
@@ -153,30 +163,10 @@ export function createGateway(options: GatewayOptions) {
                 return;
             }
             const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '';
-            const adminBearer = timingSafeEqual(Buffer.from(digest(token)), Buffer.from(digest(options.adminToken)));
-            const cookie = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith('gateway_console='))?.slice('gateway_console='.length);
-            const browser = cookie ? browserSessions.get(digest(cookie)) : undefined;
-            const browserAdmin = !!browser && browser.expires > Date.now() && (!origin || origin === browser.origin);
-            if (browserAdmin && method !== 'GET' && !origin)
-                throw new DomainError('DENY', 'Browser writes require the paired Origin');
-            const isAdmin = adminBearer || browserAdmin;
-            const credential = store.db.prepare('SELECT session_id FROM gateway_credentials WHERE hash=?').get(digest(token));
-            if (!isAdmin && !credential)
-                return send({ error: { code: 'UNAUTHORIZED', message: 'Credential required' } }, 401);
-            if (path === '/v1/console/login' && method === 'POST') {
-                if (!adminBearer || !origin)
-                    throw new DomainError('DENY', 'Admin bearer and allowed Console Origin required');
-                const browserToken = randomBytes(32).toString('hex');
-                browserSessions.set(digest(browserToken), { origin, expires: Date.now() + 8 * 60 * 60 * 1000 });
-                res.setHeader('Set-Cookie', `gateway_console=${browserToken}; HttpOnly; SameSite=Strict; Path=/v1; Max-Age=28800`);
-                return send({ ok: true });
-            }
-            if (path === '/v1/console/logout' && method === 'POST') {
-                if (cookie)
-                    browserSessions.delete(digest(cookie));
-                res.setHeader('Set-Cookie', 'gateway_console=; HttpOnly; SameSite=Strict; Path=/v1; Max-Age=0');
-                return send({ ok: true });
-            }
+            const credential = token ? store.db.prepare('SELECT session_id FROM gateway_credentials WHERE hash=?').get(digest(token)) : undefined;
+            if (req.headers.authorization && !credential)
+                return send({ error: { code: 'UNAUTHORIZED', message: 'Invalid session credential' } }, 401);
+            const isAdmin = !req.headers.authorization;
             const sid = isAdmin ? undefined : String(credential!.session_id);
             if (sid && !(/^\/v1\/sessions\/[^/]+\/end$/.test(path) || path === '/v1/stream'))
                 active(sid);
@@ -340,6 +330,7 @@ export function createGateway(options: GatewayOptions) {
                     return send(svc.events(wid, { afterSequence: Number(url.searchParams.get('after') ?? 0), limit: Number(url.searchParams.get('limit') ?? 100) }));
             }
             if (path === '/v1/events' && method === 'POST') {
+                if (!sid) throw new DomainError('DENY', 'Session credential required for activity');
                 const b = z.object({ id: text, workspaceId: text, source: text, nativeId: text, sessionId: text.optional(), type: text, mode: z.literal('observed'), payload: z.unknown(), occurredAt: text }).parse(await body(req));
                 const inserted=svc.ingest({ ...b, payload: b.payload });
                 if(inserted&&b.sessionId)tasks.observe(b.sessionId,b.type,b.payload);
@@ -391,10 +382,6 @@ export function createGateway(options: GatewayOptions) {
                 res.write(': connected\n\n');
                 streams.add(res);
                 const poll = () => {
-                    if (browser && (!cookie || !browserSessions.has(digest(cookie)) || browser.expires <= Date.now())) {
-                        res.end();
-                        return;
-                    }
                     const rows = store.db.prepare('SELECT sequence,data FROM events WHERE sequence>? ORDER BY sequence LIMIT 100').all(cursor) as {
                         sequence: number;
                         data: string;
@@ -512,6 +499,19 @@ export function createGateway(options: GatewayOptions) {
                     const b = z.object({workIds:z.array(text).min(1),decision:z.enum(['accepted','rejected']),expectedMainRevision:z.number().int().min(0)}).parse(await body(req));
                     return send(admin.decideMerge(branchId!,b.workIds,b.decision,b.expectedMainRevision),201);
                 }
+            }
+            if (method === 'GET' && options.consoleDirectory && !path.startsWith('/v1/')) {
+                const root = resolve(options.consoleDirectory);
+                const target = resolve(root, '.' + decodeURIComponent(path));
+                if (!target.startsWith(root + sep) && target !== root) throw new DomainError('DENY', 'Invalid asset path');
+                let file = target;
+                if (!extname(path)) file = resolve(root, 'index.html');
+                try {
+                    const data = readFileSync(file);
+                    const mime: Record<string,string> = {'.html':'text/html', '.js':'text/javascript', '.css':'text/css', '.svg':'image/svg+xml', '.png':'image/png', '.ico':'image/x-icon'};
+                    res.writeHead(200, {'content-type': mime[extname(file)] ?? 'application/octet-stream', 'x-content-type-options':'nosniff', 'cache-control':'no-cache'});
+                    res.end(data); return;
+                } catch { /* missing Console build or asset */ }
             }
             send({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404);
         }

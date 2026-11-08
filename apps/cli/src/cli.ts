@@ -13,6 +13,8 @@ const EXIT: Record<string, number> = { USAGE: 2, AMBIGUOUS: 2, DENY: 3, IDENTITY
 const HINTS: Record<string, string> = { DENY: 'This operation is not allowed for the current identity.', IDENTITY: 'Run this human governance command without --as <session>.', STALE: 'Main changed. Refresh the branch or Main view and retry.', NOT_FOUND: 'List current records with agentree status.' };
 export const HELP = `agentree — supervision for independent coding agents
 
+Run agentree with no arguments to start the Gateway and open the Console.
+
 Usage: agentree <command> [options]  (global: --json --workspace <name|id> --db <path> --as <session>)
 
 Workspace and native activity

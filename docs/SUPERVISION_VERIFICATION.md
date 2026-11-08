@@ -31,7 +31,7 @@ After pulling `main` at `811bfd4`, the updated Console suite (6 test files) and 
 - Rooted declared/native write overlap, nested roots, read-only/outside-path exclusion, durable evidence beyond the activity window, and retained human dispositions.
 - Atomic work acceptance/rejection, explicit Main incompatibility, human conflict assessment, and corrections.
 - Version 1/2 migration, restart persistence, legacy provenance, and event deduplication.
-- Native request identity, supported approval callbacks, Claude hooks, stop requests versus reported exits, timeouts, Console cookies/origins, audit events, and resumable SSE.
+- Native request identity, supported approval callbacks, Claude hooks, stop requests versus reported exits, timeouts, Console origins, audit events, and resumable SSE.
 - Durable task submission, retry identity, session isolation, cancellation, uncertain delivery, and matching native turn evidence. The managed Codex delivery test uses a fake App Server.
 - Console Main workflows, acceptance, conflict assessment, and approvals, including edits invalidated by removal or workspace changes.
 

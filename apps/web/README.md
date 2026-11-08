@@ -24,9 +24,9 @@ npm --prefix apps/web run dev          # standalone mock preview
 npm --prefix apps/web run dev:live     # running local Gateway required
 ```
 
-Open `http://localhost:5173/?api=mock` or `http://localhost:5173/?api=live` to select the mode explicitly. Otherwise selection uses the saved mode before the Vite mode, then defaults to mock. Mock records reset on reload.
+Open `http://localhost:5173/?api=mock` or `http://localhost:5173/?api=live` to select the mode explicitly. Otherwise selection uses the saved mode, then the Vite mode; Vite defaults to mock and built assets default to live. Mock records reset on reload.
 
-For live setup, follow the [root quick start](../../README.md#quick-start). Pair once using the admin token. The page does not persist that token; subsequent REST and SSE requests use the HttpOnly cookie. The default Gateway URL is `http://localhost:8787`. Set `VITE_GATEWAY_URL` when starting Vite or building to change it, and allow the Console origin in the Gateway configuration. Keep the Console and Gateway hostnames consistent for browser cookies.
+For live setup, follow the [root quick start](../../README.md#quick-start). Built Console assets use same-origin REST and SSE requests to the Gateway, with no browser pairing step. Vite live mode (`npm run dev:live`) connects to `http://localhost:8787`; set `VITE_GATEWAY_URL` to override that endpoint. The Gateway must allow the Console origin.
 
 ## Verify and build
 

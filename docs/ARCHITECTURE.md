@@ -24,11 +24,11 @@ Agentree supervises independent native agents. Humans own Main and acceptance de
 | [Sync](../packages/sync/README.md) | Main snapshots, branch context, corrections, and delivery ledger |
 | [MCP](../packages/mcp/README.md) | Session-bound reads and proposals with credential revalidation |
 | [Adapters](../packages/adapters/README.md) | Native observation, managed launch, approval callbacks, and ingestion recovery |
-| Gateway | REST authentication, browser pairing, lifecycle, approvals, SSE, and [task delivery](TASK_DISPATCH_API.md) |
+| Gateway | REST origin and native identity checks, lifecycle, approvals, SSE, and [task delivery](TASK_DISPATCH_API.md) |
 | [CLI](../apps/cli/README.md) | Direct local database inspection and human supervision commands |
 | [Console](../apps/web/README.md) | Human Main editing, branch inspection, conflict assessment, corrections, and approvals |
 
-Actors are constructed at trusted boundaries. Agents read within their workspace and propose only on their session branch. Main mutations, merge/conflict decisions, corrections, workspace creation, and session registration remain human operations. Browser writes require the paired origin. Local CLI identity assumes trusted access to the database.
+Actors are constructed at trusted boundaries. Agents read within their workspace and propose only on their session branch. Main mutations, merge/conflict decisions, corrections, workspace creation, and session registration remain human operations. Browser writes require an allowed Origin. Local CLI identity assumes trusted access to the database.
 
 ## Evidence and control
 

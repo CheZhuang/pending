@@ -15,7 +15,7 @@ let baseUrl: string;
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-gateway-test-'));
   database = join(directory, 'gateway.sqlite');
-  gateway = createGateway({ database, adminToken, approvalTimeoutMs: 1200 });
+  gateway = createGateway({ database, approvalTimeoutMs: 1200 });
   baseUrl = await listen(gateway.server);
 });
 
@@ -26,7 +26,7 @@ after(async () => {
 
 test('Gateway credentials, approval enforcement, timeout, and SQLite recovery', async () => {
   const unauthorized = await fetch(`${baseUrl}/v1/approvals`);
-  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.status, 200, 'local human access can read the admin approvals route without a bearer');
 
   const first = await registerSession();
   const second = await registerSession();
@@ -79,7 +79,7 @@ test('Gateway credentials, approval enforcement, timeout, and SQLite recovery', 
   const restartPending = await waitForPending(first.sessionId, timedOut.id);
   await gateway.close();
   await new Promise(resolveWait => setTimeout(resolveWait, 1250));
-  gateway = createGateway({ database, adminToken, approvalTimeoutMs: 100 });
+  gateway = createGateway({ database, approvalTimeoutMs: 100 });
   baseUrl = await listen(gateway.server);
   const restartedApprovals = await (await request('/v1/approvals', adminToken)).json() as ToolApproval[];
   assert.equal(restartedApprovals.find(a => a.id === restartPending.id)?.state, 'timeout');
@@ -105,7 +105,7 @@ async function registerSession() {
 async function request(path: string, token: string, method = 'GET', data?: unknown): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }
