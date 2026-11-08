@@ -8,7 +8,7 @@ The Console is the human supervision UI, built with Vue 3, Vite, Naive UI, and V
 | Main | Shared reference editing, change previews, removal, entry restoration, provenance, and history |
 | Main history | Global revisions, historical comparisons, and whole-Main or entry restoration |
 | Tasks | Submit instructions with optional Main context, inspect native delivery evidence, and request cancellation |
-| Branches | Proposals, file evidence, recent activity, acceptance/rejection, and corrections |
+| Branches | Branch tree (Main + agent lanes, proposals and merges), proposals, file evidence, recent activity, acceptance/rejection, and corrections |
 | Conflicts | Evidence, human reports, and explained conflict assessments |
 | Activity | Event history and SSE, including observation and approval records |
 | Approvals | Pending controlled tool calls and their outcomes |
