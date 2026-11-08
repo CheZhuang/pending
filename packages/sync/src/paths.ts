@@ -2,8 +2,8 @@
 // onto canonical workspace-relative scopes `{ rootId, path }`.
 // Pure lexical mapping: no filesystem access, no symlink resolution.
 import { isAbsolute, relative, resolve } from 'node:path';
-import type { Scope, WorkspaceRoot } from '../../contracts/src/index.js';
-import { normalizeScope } from '../../core/src/scope.js';
+import type { FileRef, WorkspaceRoot } from '../../contracts/src/index.js';
+import { normalizeFile } from '../../core/src/scope.js';
 
 export interface RootedPath {
   rootId?: string;
@@ -21,15 +21,16 @@ function within(rootPath: string, target: string): string | undefined {
  * Resolve a native path to a root-relative path.
  * - Absolute paths (or relative paths with a `cwd`) pick the longest matching root.
  * - Bare relative paths only resolve when the workspace has 0 or 1 roots.
- * Returns undefined for paths outside the workspace or ambiguous paths.
+ * Returns undefined for paths outside the workspace, unknown roots, or
+ * relative paths that cannot be attributed to a known root.
  */
 export function toRootedPath(nativePath: string, roots: WorkspaceRoot[], cwd?: string): RootedPath | undefined {
   if (typeof nativePath !== 'string' || nativePath.length === 0) return undefined;
   const absolute = isAbsolute(nativePath) ? nativePath : cwd && isAbsolute(cwd) ? resolve(cwd, nativePath) : undefined;
 
   if (absolute === undefined) {
-    if (roots.length > 1) return undefined;
-    return canonical({ path: nativePath, ...(roots[0] ? { rootId: roots[0].id } : {}) }, roots);
+    if (roots.length !== 1) return undefined;
+    return canonical({ path: nativePath, rootId: roots[0]!.id }, roots);
   }
 
   let best: { root: WorkspaceRoot; rel: string } | undefined;
@@ -42,9 +43,10 @@ export function toRootedPath(nativePath: string, roots: WorkspaceRoot[], cwd?: s
 }
 
 function canonical(path: RootedPath, roots: WorkspaceRoot[]): RootedPath | undefined {
+  if (!path.rootId) return undefined;
   try {
-    const scope = normalizeScope({ type: 'file', ...path }, roots) as Extract<Scope, { type: 'file' }>;
-    return { path: scope.path, ...(scope.rootId === undefined ? {} : { rootId: scope.rootId }) };
+    const file = normalizeFile(path as FileRef, roots);
+    return { path: file.path, rootId: file.rootId };
   } catch {
     return undefined; // parent traversal, empty path, unknown root
   }

@@ -2,14 +2,6 @@
 
 export const short = (id) => (id ? String(id).slice(0, 8) : '—');
 
-export function scopeText(scope) {
-  if (!scope) return '—';
-  if (scope.type === 'workspace') return 'workspace';
-  if (scope.type === 'task') return `task:${scope.taskId}`;
-  const root = scope.rootId ? `${scope.rootId}:` : '';
-  return `${root}${scope.path}${scope.type === 'folder' && scope.path !== '.' ? '/' : ''}`;
-}
-
 export function clip(text, max = 80) {
   const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -47,18 +39,14 @@ export function eventSummary(e) {
   switch (e.type) {
     case 'policy.decision':
       return `${actorText(p.actor)} ${str(p.operation)} → ${str(p.outcome).toUpperCase()}${p.outcome === 'allow' ? '' : ` (${str(p.reason)})`}`;
-    case 'context.published': {
-      const k = rec(p.knowledge);
-      return `${str(k.kind)} "${str(k.key)}" @ ${scopeText(k.scope)}: ${clip(k.body, 60)}`;
+    case 'main.created': case 'main.updated': case 'main.removed': return `Main reference ${str(p.removed ? 'removed' : 'saved')} · revision ${p.revision ?? '?'}`;
+    case 'work.proposed': return `Work proposed: ${clip(str(p.body), 70)}`;
+    case 'merge.decided': return `Work ${str(p.state)} into Main · revision ${p.mainRevision ?? '?'}`;
+    case 'conflict.reported': case 'conflict.decided': {
+      const conflict = rec(p.conflict ?? p);
+      return `Conflict ${str(conflict.status)}: ${clip(str(conflict.explanation), 65)}`;
     }
-    case 'merge.created':
-      return `merge ${short(p.id)} · ${(p.commitIds ?? []).length} commit(s)${p.reviewId ? ` · review ${short(p.reviewId)}` : ''}`;
-    case 'merge.applied':
-      return `merge ${short(rec(p.merge).id)} applied by ${actorText(p.actor)}`;
-    case 'review.decided': {
-      const r = rec(p.review);
-      return `review ${short(r.id)} ${str(r.decision)} by ${actorText(p.actor)}`;
-    }
+    case 'correction.sent': return `Correction sent to branch ${short(p.branchId)}`;
     case 'tool.pending':
       return `${str(p.tool)} ${clip(toolTarget(p.input), 60)} · waiting for a human`;
     case 'tool.decided':
@@ -88,6 +76,14 @@ export function eventSummary(e) {
       return clip(JSON.stringify(e.payload ?? null), 90);
     }
   }
+}
+
+/** Distinguish telemetry, runtime-reported results, and Gateway interception records. */
+export function eventEvidence(e) {
+  if (e.mode === 'controlled' && e.source === 'gateway' && (e.type === 'tool.pending' || e.type === 'tool.decided' || e.type === 'tool.execution-decision')) return 'Intercepted tool decision';
+  if (e.mode === 'observed' && (e.type === 'tool.result' || e.type === 'tool.failed' || e.type === 'item/completed')) return 'Runtime-reported result';
+  if (e.mode === 'observed') return 'Observed';
+  return 'Gateway record';
 }
 
 /** Tag color for an event row. */

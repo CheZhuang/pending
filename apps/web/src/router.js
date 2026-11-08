@@ -2,10 +2,13 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 export const routes = [
-  { path: '/', name: 'overview', component: () => import('./views/OverviewView.vue'), meta: { title: 'Overview' } },
+  { path: '/', redirect: '/main' },
+  { path: '/overview', name: 'overview', component: () => import('./views/OverviewView.vue'), meta: { title: 'Overview' } },
+  { path: '/main', name: 'main', component: () => import('./views/MainView.vue'), meta: { title: 'Main' } },
+  { path: '/branches', name: 'branches', component: () => import('./views/BranchesView.vue'), meta: { title: 'Branches' } },
+  { path: '/conflicts', name: 'conflicts', component: () => import('./views/ConflictsView.vue'), meta: { title: 'Conflicts' } },
   { path: '/activity', name: 'activity', component: () => import('./views/ActivityView.vue'), meta: { title: 'Activity' } },
-  { path: '/reviews', name: 'reviews', component: () => import('./views/ReviewsView.vue'), meta: { title: 'Reviews' } },
-  { path: '/context', name: 'context', component: () => import('./views/ContextView.vue'), meta: { title: 'Context' } },
+  { path: '/approvals', name: 'approvals', component: () => import('./views/ApprovalsView.vue'), meta: { title: 'Approvals' } },
 ];
 
 export const router = createRouter({ history: createWebHashHistory(), routes });

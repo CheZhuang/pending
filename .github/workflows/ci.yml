@@ -28,3 +28,9 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Install Console dependencies
+        run: npm ci --prefix apps/web
+      - name: Test Console supervision workflows
+        run: npm --prefix apps/web test
+      - name: Build Console
+        run: npm --prefix apps/web run build

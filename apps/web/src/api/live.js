@@ -40,19 +40,23 @@ export const live = {
 
   workspaces: () => request('/v1/workspaces'),
   branches: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/branches`),
+  main: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`),
+  supervision: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/supervision`),
+  conflicts: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts`),
+  updateMain: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`, { method: 'POST', body }),
+  updateMainEntry: (workspaceId, entryId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}`, { method: 'POST', body }),
+  mainHistory: (workspaceId, entryId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}/history`),
+  decideConflict: (workspaceId, id, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts/${encodeURIComponent(id)}`, { method: 'POST', body }),
+  reportConflict: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts`, { method: 'POST', body }),
+  branchWork: (branchId) => request(`/v1/branches/${encodeURIComponent(branchId)}/work`),
+  correctBranch: (branchId, body) => request(`/v1/branches/${encodeURIComponent(branchId)}/corrections`, { method: 'POST', body }),
+  mergeWork: (branchId, body) => request(`/v1/branches/${encodeURIComponent(branchId)}/merge`, { method: 'POST', body }),
+  merges: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/merges`),
   sessions: () => request('/v1/sessions'),
   killSession: (id) => request(`/v1/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
 
   events: (workspaceId, { after = 0, limit = 1000 } = {}) =>
     request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/events?after=${after}&limit=${limit}`),
-
-  context: (branchId) => request(`/v1/branches/${encodeURIComponent(branchId)}/context`),
-  merges: () => request('/v1/merges'),
-  reviews: () => request('/v1/reviews'),
-  review: (id) => request(`/v1/reviews/${encodeURIComponent(id)}`),
-  resolveReview: (id, decision, resolutions) =>
-    request(`/v1/reviews/${encodeURIComponent(id)}`, { method: 'POST', body: { decision, ...(resolutions ? { resolutions } : {}) } }),
-  applyMerge: (id) => request(`/v1/merges/${encodeURIComponent(id)}/apply`, { method: 'POST' }),
 
   approvals: () => request('/v1/approvals'),
   decideApproval: (id, decision, reason) =>

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { EventPage, EventQuery, SequencedEvent } from '../../contracts/src/index.js';
+import type { EventPage, EventQuery, SequencedEvent, Workspace, Branch, MainEntry, BranchWork, FileRef } from '../../contracts/src/index.js';
 import { DatabaseSync } from 'node:sqlite';
 
 export interface StoredEvent {
@@ -17,12 +17,13 @@ export class SqliteStore {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     this.migrate();
+    this.migrateSupervision();
   }
 
   private migrate(): void {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
-    if (version > 2) throw new Error('Unsupported database schema version');
-    if (version === 2) return;
+    if (version > 3) throw new Error('Unsupported database schema version');
+    if (version >= 2) return;
     this.transaction(() => {
       if (version === 0) this.db.exec(`
         CREATE TABLE entities (
@@ -130,11 +131,64 @@ export class SqliteStore {
     });
   }
 
-  recordDecision(branchId: string, revision: number, identity: string, commitId: string | null): void {
+  /** One-way projection of old knowledge records; original rows remain audit evidence. */
+  private migrateSupervision(): void {
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 3) return;
+    this.transaction(() => {
+      type LegacyCommit = {id:string;workspaceId:string;branchId:string;revision:number;
+        knowledge:{kind:string;body:string;scope:{type:string;rootId?:string;path?:string}};
+        provenance:{sessionId:string;eventIds:string[]};createdAt:string};
+      const commits = this.list<LegacyCommit>('commit');
+      const workspaces = this.list<Workspace>('workspace');
+      for (const workspace of workspaces) {
+        const attachments = this.db.prepare('SELECT commit_id,revision FROM branch_commits WHERE branch_id=? ORDER BY revision')
+          .all(workspace.mainBranchId) as Array<{commit_id:string;revision:number}>;
+        const acceptedIds = new Set(attachments.map(row => row.commit_id));
+        const main = this.get<Branch>(workspace.mainBranchId)!;
+        const activeDecisions = new Set(this.decisions<LegacyCommit>(main.id,main.revision).map(c => c.id));
+        const filesFor = (commit:LegacyCommit):FileRef[] => {
+          const scope = commit.knowledge.scope;
+          const rootId = scope.rootId ?? (workspace.roots.length === 1 ? workspace.roots[0]!.id : undefined);
+          if (scope.type !== 'file' || !scope.path || !rootId || !workspace.roots.some(r => r.id === rootId)) return [];
+          const segments = scope.path.replace(/\\/g,'/').split('/');
+          if (scope.path.startsWith('/') || scope.path.startsWith('\\') || /^[A-Za-z]:/.test(scope.path) || segments.includes('..')) return [];
+          const path = segments.filter(p => p && p !== '.').join('/');
+          return path ? [{rootId,path}] : [];
+        };
+        for (const commit of commits.filter(c => c.workspaceId === workspace.id && c.branchId !== main.id)) {
+          const work:BranchWork = {id:`legacy-work:${commit.id}`,workspaceId:workspace.id,branchId:commit.branchId,
+            sessionId:commit.provenance.sessionId,body:commit.knowledge.body,files:filesFor(commit),
+            eventIds:[...commit.provenance.eventIds],conflictsWithMain:[],
+            state:acceptedIds.has(commit.id) ? 'accepted' : 'proposed',createdAt:commit.createdAt};
+          this.insert(work.id,'branch-work',work);
+        }
+        for (const attachment of attachments) {
+          const commit = commits.find(c => c.id === attachment.commit_id);
+          if (!commit) continue;
+          const entry:MainEntry = {id:`legacy-main:${commit.id}`,workspaceId:workspace.id,
+            body:commit.knowledge.body,files:filesFor(commit),revision:attachment.revision,
+            removed:commit.knowledge.kind === 'decision' && !activeDecisions.has(commit.id),
+            actor:{type:'human',id:'legacy-acceptance'},createdAt:commit.createdAt,legacyCommitId:commit.id,
+            ...(commit.branchId !== main.id ? {sourceWorkId:`legacy-work:${commit.id}`} : {})};
+          this.insert(entry.id,'main-entry',entry);
+          this.insert(`legacy-revision:${commit.id}`,'main-revision',{id:`legacy-revision:${commit.id}`,workspaceId:workspace.id,entry});
+        }
+        const eventId = randomUUID();
+        this.appendEvent({id:eventId,workspaceId:workspace.id,source:'gateway',nativeId:eventId,
+          type:'storage.supervision-migrated',mode:'controlled',payload:{from:2,to:3,acceptedEntries:attachments.length,
+            note:'Legacy accepted content projected; pending reviews do not confer acceptance. Original provenance retained in legacy commits.'},occurredAt:new Date().toISOString()});
+      }
+      this.db.exec(`CREATE TRIGGER immutable_main_revision_update BEFORE UPDATE ON entities WHEN OLD.kind = 'main-revision'
+        BEGIN SELECT RAISE(ABORT, 'Main revision history is immutable'); END;`);
+      this.db.exec('PRAGMA user_version = 3');
+    });
+  }
+
+  private recordDecision(branchId: string, revision: number, identity: string, commitId: string | null): void {
     this.db.prepare('INSERT INTO decision_changes(branch_id,revision,identity,commit_id) VALUES(?,?,?,?)').run(branchId, revision, identity, commitId);
   }
 
-  decisions<T>(branchId: string, revision: number): T[] {
+  private decisions<T>(branchId: string, revision: number): T[] {
     const rows = this.db.prepare(`SELECT e.data FROM (
       SELECT commit_id, ROW_NUMBER() OVER (PARTITION BY identity ORDER BY revision DESC) AS rank
       FROM decision_changes WHERE branch_id=? AND revision<=?
@@ -163,6 +217,16 @@ export class SqliteStore {
     const hasMore = rows.length > limit;
     const events = rows.slice(0,limit).map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
     return {events, nextSequence:hasMore ? events.at(-1)!.sequence : Math.max(after,through), throughSequence:through, hasMore};
+  }
+
+  /** Newest session-associated native/approval events for a logical branch overview. */
+  recentSessionEvents(workspaceId: string, sessionIds: string[], limit = 30): SequencedEvent[] {
+    if (!sessionIds.length) return [];
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`SELECT data,sequence FROM events WHERE workspace_id=?
+      AND json_extract(data,'$.sessionId') IN (${placeholders}) ORDER BY sequence DESC LIMIT ?`)
+      .all(workspaceId,...sessionIds,limit) as Array<{data:string;sequence:number}>;
+    return rows.map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
   }
 
   transaction<T>(fn: () => T, write = true): T {

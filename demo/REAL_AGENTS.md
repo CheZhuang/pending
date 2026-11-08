@@ -17,9 +17,9 @@ Claude's own UI.
 | Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ❌ approvals not routed (adapter declines them) |
 | Live traffic in the console and CLI | ✅ one record per tool call (policy, pending, decision) | ❌ until a host pushes App Server events |
 | Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ❌ |
-| Publish and sync context, merges (MCP tools) | ❌ no MCP host process for real agents yet | ❌ |
+| Retrieve Main / corrections and propose branch work (MCP tools) | ✅ session-bound host is configured | ✅ session-bound host is configured |
 
-For the **collaboration loop** (findings, scoped sync, conflicting decisions, human merge) use
+For the **supervision loop** (Main, proposed work, explicit conflict evidence and human correction) use
 `npm run demo`. It runs the same sync, MCP, gateway and CLI code with two simulated agents (see `README.md`).
 The gaps above and who owns them are listed at the end.
 
@@ -158,8 +158,8 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 3. **Deny** `git push --force` with a reason → Claude reports it was blocked.
 4. **Stop** → the session ends, and the terminal shows the termination.
 5. `npm run agentree -- log --audit`: the auditable record of every decision.
-6. Then `npm run demo` and the console's **Context** page for the multi-agent part: findings, scoped sync,
-   the conflict, and the human merge in the branch tree.
+6. Then `npm run demo` for the multi-agent part: current Main, branch proposals,
+   the conflict signal, and a human acceptance/correction.
 
 ---
 
@@ -178,11 +178,7 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 
 ## Missing for the full real-agent loop
 
-1. **MCP host for real agents (B, with A).** A stdio entry point (for example `agentree mcp`) that the launcher
-   passes to Claude via `--mcp-config`, binding the MCP connection to the session through
-   `HARNESS_SESSION_TOKEN` (never a model-supplied id). Once it exists, Claude can call `context_publish`,
-   `context_sync`, `merge_request` and the console's Reviews and Context pages work unchanged.
-2. **Codex launcher host (B).**
+1. **Codex launcher host (B).**
    - Register a `codex` session (`POST /v1/sessions`).
    - Start `CodexAppServerAdapter.start({ cwd })` and `startTurn(prompt)`.
    - Push `readEvents` batches to `POST /v1/events` with the session token, saving the cursor in `SqliteCursorStore`.
