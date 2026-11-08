@@ -47,6 +47,7 @@ class StdioJsonRpc {
     child.on('error', error => this.fail(error));
     child.on('exit', (code, signal) => this.fail(new Error(`codex app-server exited (${signal ?? code ?? 'unknown'})`)));
   }
+  get pid(): number | undefined { return this.child.pid; }
 
   request<T>(method: string, params: JsonObject = {}): Promise<T> {
     if (this.closed) return Promise.reject(new Error('Codex app-server transport is closed'));
@@ -174,6 +175,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     this.history = recovered.records.map(record => ({ ...record, payload: record.payload }));
     rpc.onNotification(notification => this.capture(notification));
   }
+  get processId(): number | undefined { return this.rpc.pid; }
 
   static async start(options: CodexAppServerOptions = {}): Promise<CodexAppServerAdapter> {
     const rpc = CodexAppServerAdapter.spawn(options);

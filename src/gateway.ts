@@ -11,11 +11,15 @@ import { TaskDispatch } from './task-dispatch.js';
 import { ContextSync } from '../packages/sync/src/engine.js';
 import { EntityLedger } from '../packages/sync/src/ledger.js';
 import { collectConflictEvidence } from './conflict-evidence.js';
+import { ProcessDiscovery, sameProcess, type ProcessProvider, type ManagedProcessBinding } from '../packages/adapters/src/process-discovery.js';
+import { LocalProcessProvider } from '../packages/adapters/src/process-platform.js';
 export interface GatewayOptions {
     database: string;
     consoleDirectory?: string;
     approvalTimeoutMs?: number;
     consoleOrigins?: string[];
+    processProvider?: ProcessProvider;
+    discoveryIntervalMs?: number;
 }
 import type { ToolApproval } from '../packages/contracts/src/gateway.js';
 export type { ToolApproval } from '../packages/contracts/src/gateway.js';
@@ -43,6 +47,10 @@ export function createGateway(options: GatewayOptions) {
     CREATE TABLE IF NOT EXISTS gateway_approvals (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));
     CREATE INDEX IF NOT EXISTS gateway_pending_deadline ON gateway_approvals(json_extract(data,'$.state'),json_extract(data,'$.expiresAt'));`);
     const streams = new Set<ServerResponse>();
+    // Trusted launcher claims are ephemeral, like the processes they describe.
+    const processBindings = new Map<string, ManagedProcessBinding>();
+    const discovery = new ProcessDiscovery(options.processProvider ?? new LocalProcessProvider(), () => [...processBindings.values()].filter(b =>
+        store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(b.sessionId)?.state === 'active'));
     const allowedOrigins = new Set(options.consoleOrigins ?? []);
     for (const origin of allowedOrigins) {
         const parsed = new URL(origin);
@@ -104,6 +112,7 @@ export function createGateway(options: GatewayOptions) {
     expire();
     const timer = setInterval(expire, 100);
     timer.unref();
+    discovery.start(options.discoveryIntervalMs);
     function session(id: string) {
         const s = store.get<Session>(id, 'session');
         if (!s)
@@ -118,7 +127,7 @@ export function createGateway(options: GatewayOptions) {
         const state = String(store.db.prepare('SELECT state FROM gateway_sessions WHERE session_id=?').get(id)?.state ?? 'ended');
         const row = store.db.prepare('SELECT data FROM gateway_exit_reports WHERE session_id=?').get(id);
         const latestTask=tasks.list(id)[0];
-        return { state, processStatus: row ? 'exit-reported' : 'unknown', ...(row ? { exit: JSON.parse(String(row.data)) } : {}),taskDispatch:{available:state==='active'&&session(id).runtime==='codex-app-server'&&tasks.available(id),...(latestTask?{latestTask:{id:latestTask.id,status:latestTask.status,nativeTurnId:latestTask.nativeTurnId}}:{})} };
+        return { state, ...(processBindings.has(id) ? {process:processBindings.get(id)!.process} : {}), processStatus: row ? 'exit-reported' : 'unknown', ...(row ? { exit: JSON.parse(String(row.data)) } : {}),taskDispatch:{available:state==='active'&&session(id).runtime==='codex-app-server'&&tasks.available(id),...(latestTask?{latestTask:{id:latestTask.id,status:latestTask.status,nativeTurnId:latestTask.nativeTurnId}}:{})} };
     }
     async function body(req: IncomingMessage) {
         let raw = '';
@@ -183,6 +192,31 @@ export function createGateway(options: GatewayOptions) {
             if (path === '/v1/workspaces' && method === 'GET') {
                 human();
                 return send(store.list('workspace'));
+            }
+            if (path === '/v1/processes' && method === 'GET') {
+                human();
+                if (discovery.current().status === 'initializing') await discovery.refresh();
+                return send(discovery.current());
+            }
+            if (path === '/v1/processes/refresh' && method === 'POST') {
+                human();
+                return send(await discovery.refresh());
+            }
+            const processRoute = path.match(/^\/v1\/sessions\/([^/]+)\/process$/);
+            if (processRoute && method === 'POST') {
+                const s = own(processRoute[1]!);
+                if (sid !== s.id) throw new DomainError('DENY', 'Session credential required');
+                active(s.id);
+                const identity = z.object({pid:z.number().int().positive().safe(),startTime:text}).parse(await body(req));
+                const inventory = await discovery.refresh();
+                active(s.id); // The session may have ended while enumeration was in flight.
+                const found = inventory.processes.find(p => sameProcess(p, identity));
+                if (!found || !(found.runtime === s.runtime || (found.runtime === 'codex' && s.runtime === 'codex-app-server')))
+                    throw new DomainError('DENY', 'Process identity does not match this runtime');
+                if ([...processBindings.values()].some(b => b.sessionId !== s.id && sameProcess(b.process, identity)))
+                    throw new DomainError('STATE', 'Process already associated with another managed session');
+                processBindings.set(s.id, {sessionId:s.id,runtime:s.runtime,process:identity});
+                return send({ok:true});
             }
             if (path === '/v1/workspaces' && method === 'POST') {
                 human();
@@ -251,7 +285,7 @@ export function createGateway(options: GatewayOptions) {
                                 const overdue = Date.parse(a.expiresAt) <= Date.now();
                                 settle(a, overdue ? 'timeout' : 'denied', overdue ? 'Approval deadline elapsed' : 'Session ended');
                             }
-                        if(exiting)tasks.sessionEnded(s.id);
+                        if(exiting) { tasks.sessionEnded(s.id); processBindings.delete(s.id); }
                     });
                     return send({ ok: true, ...lifecycle(s.id) }, exiting || prior === 'ended' ? 200 : 202);
                 }
@@ -523,6 +557,7 @@ export function createGateway(options: GatewayOptions) {
     });
     return { server, store, close: async () => {
             clearInterval(timer);
+            await discovery.close();
             for (const res of streams)
                 res.end();
             server.closeAllConnections();
