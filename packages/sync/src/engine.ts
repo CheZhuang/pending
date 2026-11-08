@@ -77,6 +77,39 @@ export class ContextSync {
     return delta;
   }
 
+  /** Corrections available to a managed host notification channel. These are
+   * deliberately separate from MCP context retrieval and only mark delivered
+   * after the host confirms that its native runtime accepted the notification. */
+  pendingCorrections(session: Session): Array<{ itemId: string; value: Correction }> {
+    const view = this.reader.supervision(session.workspaceId);
+    const ownBranch = view.branches.find((branch) => branch.branch.id === session.branchId);
+    const ledger = this.ledger.load(session.id);
+    return (ownBranch?.corrections ?? []).flatMap((value) => {
+      const itemId = itemKey('correction', value.id);
+      return ledger.items[itemId] ? [] : [{ itemId, value }];
+    });
+  }
+
+  correctionItemIds(session: Session): string[] {
+    const view = this.reader.supervision(session.workspaceId);
+    const ownBranch = view.branches.find((branch) => branch.branch.id === session.branchId);
+    return (ownBranch?.corrections ?? []).map(correction => itemKey('correction', correction.id));
+  }
+
+  markCorrectionsDelivered(sessionId: string, itemIds: string[]): number {
+    const ledger = this.ledger.load(sessionId);
+    let count = 0;
+    for (const itemId of itemIds) {
+      if (!itemId.startsWith('correction:')) continue;
+      const prior = ledger.items[itemId];
+      if (prior) continue;
+      ledger.items[itemId] = { itemId, state: 'delivered', attempts: 1, firstSeenAt: new Date().toISOString(), deliveredAt: new Date().toISOString() };
+      count++;
+    }
+    if (count) this.ledger.save(ledger);
+    return count;
+  }
+
   acknowledge(sessionId: string, itemIds: string[]): number {
     const ledger = this.ledger.load(sessionId); let count = 0;
     for (const id of itemIds) { const item = ledger.items[id]; if (item?.state === 'delivered') { item.state = 'acknowledged'; item.acknowledgedAt = new Date().toISOString(); count++; } }

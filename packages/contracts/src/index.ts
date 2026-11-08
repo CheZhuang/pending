@@ -67,6 +67,15 @@ export interface Conflict {
     files: FileRef[]; evidenceIds: string[]; explanation: string;
     status: 'potential' | 'confirmed' | 'resolved' | 'dismissed';
     decidedBy?: string; updatedAt?: string;
+    /** Live, best-effort workspace checkout evidence added by the human Gateway read model. */
+    fileEvidence?: ConflictFileEvidence[];
+}
+export interface ConflictFileEvidence {
+    file: FileRef; capturedAt: string;
+    currentState: { exists: boolean; bytes?: number; modifiedAt?: string; sha256?: string; unavailableReason?: string };
+    gitStatus: string; workingTreeDiff: string;
+    recentChanges: Array<{ commit: string; date: string; subject: string }>;
+    gitError?: string;
 }
 /** Human acceptance of work records into Main; never a Git/source-code merge. */
 export interface Merge {
@@ -76,6 +85,13 @@ export interface Merge {
 export interface Correction {
     id: string; workspaceId: string; branchId: string; body: string;
     mainRevision: number; actor: Actor; createdAt: string;
+    /** Added by Gateway read models; persisted correction records stay immutable. */
+    deliveries?: CorrectionDelivery[];
+}
+export interface CorrectionDelivery {
+    sessionId: string; runtime: string;
+    state: 'not-retrieved' | 'retrieved' | 'acknowledged';
+    retrievedAt?: string; acknowledgedAt?: string;
 }
 export interface BranchOverview {
     branch: Branch; sessions: Session[]; work: BranchWork[]; files: FileRef[];

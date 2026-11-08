@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { NativeGatewayClient } from '../../adapters/src/gateway-client.js';
 import { SqliteStore } from '../../storage/src/index.js';
@@ -18,7 +19,11 @@ export async function serveNativeMcp(env:NodeJS.ProcessEnv=process.env) {
       // Compare fields explicitly: JSON key order is not an identity property.
       if(!stored||Object.entries(client.session).some(([key,value])=>stored[key as keyof typeof stored]!==value))throw new Error('MCP database and Gateway session do not match');
     }
-    const server=await serveAgentreeMcp({session:client.session,service:new AgentreeService(store,{type:'agent',sessionId}),ledger:new EntityLedger(store),authorize:()=>client.authorize()});
+    const ledger=new EntityLedger(store,(_id,changes)=>{
+      const eventId=randomUUID();
+      store.appendEvent({id:eventId,workspaceId:client.session.workspaceId,sessionId,source:'gateway',nativeId:eventId,type:'correction.delivery-state',mode:'controlled',payload:{changes},occurredAt:new Date().toISOString()});
+    });
+    const server=await serveAgentreeMcp({session:client.session,service:new AgentreeService(store,{type:'agent',sessionId}),ledger,authorize:()=>client.authorize()});
     const close=async()=>{await server.close();store.close();};
     process.once('SIGTERM',()=>void close());process.once('SIGINT',()=>void close());
     return {server,store,close};

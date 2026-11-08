@@ -51,7 +51,7 @@ export const live = {
   branches: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/branches`),
   main: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`),
   supervision: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/supervision`),
-  conflicts: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts`),
+  conflicts: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts?evidence=1`),
   updateMain: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`, { method: 'POST', body }),
   updateMainEntry: (workspaceId, entryId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}`, { method: 'POST', body }),
   mainHistory: (workspaceId, entryId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}/history`),

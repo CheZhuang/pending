@@ -8,11 +8,11 @@ Agentree supervises independent native agents. Humans own Main and acceptance de
 
 **Branches** are logical work records, independent of Git branches and filesystems. Multiple native sessions can continue one branch. Work proposals contain text, optional intent, affected files, event evidence, and explicit references to incompatible Main entries. Proposed, accepted, and rejected work remains visible.
 
-**Conflicts** have status `potential`, `confirmed`, `resolved`, or `dismissed`. Rooted file overlap, explicit Main incompatibility, and human reports provide evidence. File overlap starts as potential; matching prose is not semantic detection. Humans supply explanations for their assessments. New evidence updates the same signal without reopening its human disposition. Assessment changes supervision records, not source files.
+**Conflicts** have status `potential`, `confirmed`, `resolved`, or `dismissed`. Rooted file overlap, explicit Main incompatibility, and human reports provide evidence. File overlap starts as potential; matching prose is not semantic detection. The human Gateway view adds bounded, live checkout evidence for referenced files: Git status and diff against HEAD, recent commits, and the current file's size, modified time, and hash. This describes the shared checkout and is not attributed to a logical Agentree branch. Humans supply explanations for assessments. New evidence updates the same signal without reopening its human disposition.
 
 **Merge decisions** accept or reject selected pending work in one atomic human operation. Acceptance creates Main entries with source-work links. Rejection leaves Main unchanged. Acceptance neither replaces an existing Main entry nor resolves conflicts automatically; humans reconcile the shared reference explicitly.
 
-**Corrections** are durable human messages addressed to a branch and pinned to the current Main revision. Sessions retrieve them through MCP. Retrieval and acknowledgment are delivery bookkeeping; agents may fail to poll or follow them.
+**Corrections** are durable human messages addressed to a branch and pinned to the current Main revision. Gateway tracks per-session `not-retrieved`, `retrieved`, and `acknowledged` states. Managed Codex uses App Server `turn/steer` for an active turn and starts a correction turn when idle; managed Claude injects corrections through its supported `PreToolUse` hook before a tool call continues. Delivery remains host/runtime evidence, not proof of compliance. Agents can also retrieve through MCP and explicitly acknowledge after reading.
 
 ## Ownership
 

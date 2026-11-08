@@ -223,6 +223,10 @@ export class CodexAppServerAdapter implements AgentAdapter {
     return this.rpc.request('turn/interrupt', { threadId: this.nativeId, turnId });
   }
 
+  async steerTurn(turnId: string, message: string): Promise<unknown> {
+    return this.rpc.request('turn/steer', { threadId: this.nativeId, expectedTurnId: turnId, input: [{ type: 'text', text: message }] });
+  }
+
   async readEvents(session: NativeSession, cursor?: AdapterCursor): Promise<NativeEventBatch> {
     this.assertSession(session);
     const offset = cursor ? Number(cursor.value) : 0;
