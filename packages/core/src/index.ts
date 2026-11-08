@@ -130,8 +130,8 @@ export class AgentreeService {
         return this.get<Workspace>(workspaceId,'workspace');
     }
     branches(workspaceId: string): Branch[] {
-        this.workspace(workspaceId);
-        return this.store.list<Branch>('branch').filter(b => b.workspaceId === workspaceId);
+        const workspace = this.workspace(workspaceId);
+        return this.store.list<Branch>('branch').filter(b => b.workspaceId === workspaceId && b.id !== workspace.mainBranchId);
     }
     private mainBranch(workspaceId: string): Branch {
         return this.get<Branch>(this.get<Workspace>(workspaceId,'workspace').mainBranchId,'branch');
@@ -164,7 +164,7 @@ export class AgentreeService {
         const prior = entryId ? this.get<MainEntry>(entryId,'main-entry') : undefined;
         if (prior && prior.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
         if (prior?.removed) throw new DomainError('STATE','Removed entries cannot be edited; create a new entry');
-        const entry: MainEntry = {id:entryId ?? id(),workspaceId,body:parsed.body,files:this.files(workspaceId,parsed.files),
+        const entry: MainEntry = {id:entryId ?? id(),workspaceId,body:parsed.body,files:this.files(workspaceId,input.files === undefined && prior ? prior.files : parsed.files),
             revision:++b.revision,removed,actor:this.actor,createdAt:new Date().toISOString(),
             ...(sourceWorkId ? {sourceWorkId} : prior?.sourceWorkId ? {sourceWorkId:prior.sourceWorkId} : {})};
         this.store.put(b.id,'branch',b);
@@ -210,6 +210,7 @@ export class AgentreeService {
         this.guard('context.read',branchId);
         const branch = this.get<Branch>(branchId,'branch');
         const workspace = this.get<Workspace>(branch.workspaceId,'workspace');
+        if (branch.id === workspace.mainBranchId) throw new DomainError('BRANCH','Main is the shared reference; use the Main API');
         const sessions = this.store.list<Session>('session').filter(s => s.branchId === branchId);
         const activity = this.store.recentSessionEvents(branch.workspaceId,sessions.map(s => s.id));
         const work = this.store.list<BranchWork>('branch-work').filter(w => w.branchId === branchId);

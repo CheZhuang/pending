@@ -28,6 +28,7 @@ test('agents are confined to their workspace and own branch; Main is human-only'
     assert.throws(() => f.a.main(f.other.id), code('DENY'));
     assert.throws(() => f.a.editMain(f.workspace.id, { body: 'agent edit' }, 0), code('DENY'));
     assert.equal(f.human.main(f.workspace.id).revision, 0);
+    assert.equal(f.human.branches(f.workspace.id).length,2,'Main is not an independent agent branch');
   } finally { f.store.close(); }
 });
 
@@ -35,8 +36,9 @@ test('Main entries are revised, removable, restored in history, and reject stale
   const f = fixture();
   try {
     const first = f.human.editMain(f.workspace.id, { body: 'Use the stable API', files: [file('src/api.ts')] }, 0);
-    const edited = f.human.editMain(f.workspace.id, { body: 'Use API v2', files: [file('src/api.ts')] }, 1, first.id);
+    const edited = f.human.editMain(f.workspace.id, { body: 'Use API v2' }, 1, first.id);
     assert.equal(edited.id, first.id);
+    assert.deepEqual(edited.files,first.files,'text-only edits retain related files');
     assert.throws(() => f.human.editMain(f.workspace.id, { body: 'stale' }, 1, first.id), code('STALE'));
     const removed = f.human.editMain(f.workspace.id, { body: 'Use API v2' }, 2, first.id, true);
     assert.equal(removed.removed, true);
