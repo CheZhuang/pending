@@ -19,7 +19,7 @@ export const state = reactive({
   events: [],
   lastSeq: 0,
   /** Bumped when an event of that kind arrives, so views can reload. */
-  changed: { sessions: 0, context: 0, supervision: 0, approvals: 0 },
+  changed: { sessions: 0, context: 0, supervision: 0, approvals: 0, tasks: 0 },
   loading: true,
   fatal: null,
 });
@@ -45,6 +45,8 @@ function classify(event) {
   if (t.startsWith('tool.') && event.mode === 'controlled') state.changed.approvals += 1;
   if (t.startsWith('main.') || t.startsWith('work.') || t.startsWith('merge.') || t.startsWith('conflict.') || t.startsWith('correction.')) state.changed.supervision += 1;
   if (t.startsWith('context.') || t.startsWith('main.') || t.startsWith('work.') || t.startsWith('merge.') || t.startsWith('conflict.') || t.startsWith('correction.') || t.startsWith('branch.')) state.changed.context += 1;
+  // Task records (Gateway) and native turn notifications (task evidence).
+  if (t.startsWith('task.') || (event.mode === 'observed' && t.startsWith('turn/'))) state.changed.tasks += 1;
   // Any session event can refresh branch activity or reported file evidence.
   if (event.sessionId) state.changed.supervision += 1;
 }

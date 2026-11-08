@@ -1,6 +1,7 @@
 <!-- Activity: the live event log (history + SSE) with filters, and full details per event. -->
 <script setup>
 import { computed, h, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { NCard, NDataTable, NDescriptions, NDescriptionsItem, NDrawer, NDrawerContent, NInput, NSelect, NSpace, NSwitch, NTag } from 'naive-ui';
 import { api } from '../api/index.js';
 import { eventEvidence, eventSummary, eventTone, short, time, dateTime } from '../format.js';
@@ -30,7 +31,10 @@ const match = {
 };
 
 const category = ref('all');
-const sessionFilter = ref('all');
+const route = useRoute();
+// Linked from a task or session: /activity?session=<id> starts filtered to that agent.
+const sessionFilter = ref(typeof route.query.session === 'string' ? route.query.session : 'all');
+watch(() => route.query.session, (id) => { if (typeof id === 'string') sessionFilter.value = id; });
 const search = ref('');
 const denialsOnly = ref(false);
 const paused = ref(false);

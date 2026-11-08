@@ -63,7 +63,11 @@ export function eventSummary(e) {
       return `branch ${str(p.name)}`;
     case 'workspace.created':
       return `workspace ${str(p.name)}`;
+    case 'main.restored': return `Main entry restored from revision ${rec(p.restoredFrom).revision ?? '?'} · now revision ${p.revision ?? '?'}`;
     default: {
+      if (e.type?.startsWith('task.')) return `task ${short(p.taskId)} → ${str(p.status)}${p.nativeTurnId ? ` · turn ${short(p.nativeTurnId)}` : ''}${p.reason ? ` (${clip(str(p.reason), 60)})` : ''}`;
+      const turn = rec(rec(p.params).turn);
+      if (str(p.method).startsWith('turn/') && str(turn.id)) return `${str(p.method)} · turn ${short(turn.id)}${turn.status ? ` · ${str(turn.status)}` : ''}`;
       const tool = str(p.tool_name) || str(p.tool);
       const input = p.tool_input ?? p.input;
       if (tool) return `${tool} ${clip(toolTarget(input) || str(p.command), 70)}`.trim();

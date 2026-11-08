@@ -5,6 +5,8 @@ export const routes = [
   { path: '/', redirect: '/main' },
   { path: '/overview', name: 'overview', component: () => import('./views/OverviewView.vue'), meta: { title: 'Overview' } },
   { path: '/main', name: 'main', component: () => import('./views/MainView.vue'), meta: { title: 'Main' } },
+  { path: '/main/history', name: 'main-history', component: () => import('./views/MainHistoryView.vue'), meta: { title: 'Main history', menu: 'main' } },
+  { path: '/tasks', name: 'tasks', component: () => import('./views/TasksView.vue'), meta: { title: 'Tasks' } },
   { path: '/branches', name: 'branches', component: () => import('./views/BranchesView.vue'), meta: { title: 'Branches' } },
   { path: '/conflicts', name: 'conflicts', component: () => import('./views/ConflictsView.vue'), meta: { title: 'Conflicts' } },
   { path: '/activity', name: 'activity', component: () => import('./views/ActivityView.vue'), meta: { title: 'Activity' } },
