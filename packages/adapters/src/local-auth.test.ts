@@ -69,12 +69,21 @@ test('Windows capability ACL is private and rejects a grant to Everyone', {skip:
     execFileSync(join(process.env.SystemRoot!, 'System32','WindowsPowerShell','v1.0','powershell.exe'),
       ['-NoLogo','-NoProfile','-NonInteractive','-Command', `
 $ErrorActionPreference = 'Stop'
+# Exercise ACL tampering without requiring PowerShell security-module autoload.
+$PSModuleAutoLoadingPreference = 'None'
 $path = $env:AGENTREE_TEST_CAPABILITY_PATH
-$acl = Get-Acl -LiteralPath $path
-$everyone = New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, 'Read', 'Allow')
-$acl.AddAccessRule($rule)
-Set-Acl -LiteralPath $path -AclObject $acl
+$stream = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open,
+  [System.Security.AccessControl.FileSystemRights]::FullControl,
+  [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::None)
+try {
+  $acl = $stream.GetAccessControl()
+  $everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($everyone, 'Read', 'Allow')
+  $acl.AddAccessRule($rule)
+  $stream.SetAccessControl($acl)
+  $rules = $stream.GetAccessControl().GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+  if ($rules.IdentityReference.Value -notcontains 'S-1-1-0') { throw 'Everyone grant was not applied' }
+} finally { $stream.Dispose() }
 `], {env:{...process.env,AGENTREE_TEST_CAPABILITY_PATH:`${database}.human-token`},timeout:5_000,windowsHide:true,stdio:'pipe'});
     assert.throws(()=>readLocalHumanToken(database),/Windows ACL validation failed/);
     assert.throws(()=>ensureLocalHumanToken(database),/Windows ACL validation failed/);
