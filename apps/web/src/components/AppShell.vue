@@ -12,6 +12,7 @@ import { frappe } from '../theme.js';
 import NativeProcesses from './NativeProcesses.vue';
 
 const route = useRoute();
+const showModeSelector = import.meta.env.DEV;
 const narrow = () => window.innerWidth < 900;
 const collapsed = ref(narrow());
 // Collapse the menu on narrow screens, and after navigating there.
@@ -76,7 +77,7 @@ onMounted(boot);
           <span class="conn-text">{{ connection.text }}</span>
           <span v-if="state.lastSeq" class="muted mono">#{{ state.lastSeq }}</span>
         </span>
-        <NDropdown trigger="click" :options="modeOptions" @select="switchMode">
+        <NDropdown v-if="showModeSelector" trigger="click" :options="modeOptions" @select="switchMode">
           <NTag :type="state.mode === 'mock' ? 'warning' : 'success'" size="small" round class="mode-tag">
             {{ state.mode === 'mock' ? 'MOCK' : 'LIVE' }} ▾
           </NTag>
@@ -90,11 +91,12 @@ onMounted(boot);
           <template #action><NButton size="small" @click="boot">Retry</NButton></template>
         </NAlert>
         <div v-if="state.loading && !state.workspaces.length" class="center"><NSpin /></div>
-        <div v-else-if="!state.workspaces.length && !fatal" class="page">
-          <h1 class="page-title">No workspace yet</h1>
-          <p class="page-sub">Register an agent session with the gateway (for example the managed Claude launcher), or create one with <span class="mono">npm run agentree -- init &lt;name&gt;</span>.</p>
+        <RouterView v-else-if="route.name === 'overview' || state.workspaceId" />
+        <div v-else class="page">
+          <h1 class="page-title">Choose or create a workspace</h1>
+          <p class="page-sub">Local agent discovery is available in Overview. Select a workspace to use Main, Tasks, Conflicts, and Approvals.</p>
+          <RouterLink to="/overview">Back to local agents</RouterLink>
         </div>
-        <RouterView v-else-if="state.workspaceId" />
       </NLayoutContent>
     </NLayout>
   </NLayout>

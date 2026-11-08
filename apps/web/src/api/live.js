@@ -78,6 +78,13 @@ export const live = {
   refreshProcesses: () => request('/v1/processes/refresh', { method:'POST' }),
   killSession: (id) => request(`/v1/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
 
+  // Local native process discovery (Person 2 API contract, mock-first).
+  // Response: { refreshedAt, agents: [{ id, runtime, process, cwd, workspace,
+  // session, activity, capabilities, status }] }. Capabilities are authoritative.
+  discoveredAgents: () => request('/v1/discovery/agents'),
+  refreshDiscovery: () => request('/v1/discovery/refresh', { method: 'POST', body: {} }),
+  startManagedAgent: (runtime, cwd) => request('/v1/agents/managed', { method: 'POST', body: { runtime, cwd } }),
+
   events: (workspaceId, { after = 0, limit = 1000 } = {}) =>
     request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/events?after=${after}&limit=${limit}`),
 

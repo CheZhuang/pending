@@ -13,7 +13,7 @@ const stamp = () => new Date().toISOString();
  * @param {{ speed?: number }} options speed scales the simulated native task timeline
  *   (1 = realistic seconds; tests use a small value).
  */
-export function createMock({ speed = 1 } = {}) {
+export function createMock({ speed = 1, discoveryScenario = 'default' } = {}) {
   const workspace = { id: uid(), name: 'shop', roots: [{ id: 'app', path: ROOT }], mainBranchId: 'main' };
   const branches = [
     { id: 'main', workspaceId: workspace.id, name: 'main', revision: 0 },
@@ -25,6 +25,30 @@ export function createMock({ speed = 1 } = {}) {
     { id: 'session-claude', agentId: 'claude', workspaceId: workspace.id, branchId: 'claude-auth', runtime: 'claude-code', nativeId: 'claude-7f3a', label: 'Claude Code', state: 'active', processStatus: 'unknown' },
     { id: 'session-codex', agentId: 'codex', workspaceId: workspace.id, branchId: 'codex-api', runtime: 'codex-app-server', nativeId: 'thread-api', label: 'Codex (managed)', state: 'active', processStatus: 'unknown' },
   ];
+  const discovered = [
+    {
+      id: 'proc-claude-4102', runtime: 'claude-code', status: 'running',
+      process: { pid: 4102, executable: 'claude', startedAt: '2026-11-07T17:05:00.000Z' },
+      cwd: `${ROOT}/src/auth`, workspace: { id: workspace.id, name: workspace.name, association: 'inferred-cwd' },
+      session: null, activity: null,
+      capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false },
+    },
+    {
+      id: 'proc-codex-5201', runtime: 'codex-app-server', status: 'running',
+      process: { pid: 5201, executable: 'codex', startedAt: '2026-11-07T16:55:00.000Z' },
+      cwd: ROOT, workspace: { id: workspace.id, name: workspace.name, association: 'managed-session' },
+      session: { id: 'session-codex', state: 'active', label: 'API implementation' },
+      activity: { summary: 'Completed an item changing src/api/errors.ts', observedAt: stamp(), evidence: 'native-observed' },
+      capabilities: { canInspectActivity: true, canDispatchTasks: true, canStop: true, canReviewApprovals: false },
+    },
+    {
+      id: 'proc-claude-4103', runtime: 'claude-code', status: 'running',
+      process: null, cwd: null, workspace: null, session: null, activity: null,
+      capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false },
+    },
+  ];
+  let discoveryRefresh = stamp();
+  let discoveryDisconnected = discoveryScenario === 'gateway-disconnected';
   let seq = 0;
   const events = [];
   const listeners = new Set();
@@ -169,8 +193,26 @@ export function createMock({ speed = 1 } = {}) {
     workspaces: async () => { await wait(); return [copy(workspace)]; },
     branches: async () => { await wait(); return copy(branches.filter(b => b.id !== workspace.mainBranchId)); },
     sessions: async () => { await wait(); return sessions.map(sessionView); },
-    processes: async () => ({status:'ok',processes:[],scannedAt:new Date().toISOString()}),
-    refreshProcesses: async () => ({status:'ok',processes:[],scannedAt:new Date().toISOString()}),
+    discoveredAgents: async () => {
+      await wait();
+      if (discoveryDisconnected) throw new ApiError(0, 'NETWORK', 'Cannot reach the local gateway');
+      const agents = discoveryScenario === 'empty' ? [] : discovered;
+      return copy({ refreshedAt: discoveryRefresh, agents });
+    },
+    refreshDiscovery: async () => {
+      await wait();
+      if (discoveryDisconnected) throw new ApiError(0, 'NETWORK', 'Cannot reach the local gateway');
+      const exited = discovered.find(agent => agent.id === 'proc-claude-4102');
+      if (exited) { exited.status = 'exited'; exited.process = { ...exited.process, exitedAt: stamp(), exitCode: 0 }; }
+      discoveryRefresh = stamp();
+      return copy({ refreshedAt: discoveryRefresh, agents: discoveryScenario === 'empty' ? [] : discovered });
+    },
+    startManagedAgent: async (runtime, cwd) => {
+      await wait();
+      const agent = { id: `proc-${uid()}`, runtime, status: 'running', process: null, cwd: cwd ?? null, workspace: null, session: null, activity: null,
+        capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false } };
+      discovered.unshift(agent); discoveryRefresh = stamp(); return copy(agent);
+    },
     killSession: id => run(() => {
       const session = sessions.find(s => s.id === id); if (!session) throw new ApiError(404, 'NOT_FOUND', id);
       if (session.state === 'ended') throw new ApiError(409, 'STATE', 'Session already ended');
