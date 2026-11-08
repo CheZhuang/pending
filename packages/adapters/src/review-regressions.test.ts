@@ -89,7 +89,8 @@ test('Claude PreToolUse retries retain the native tool_use_id as requestId', asy
  for(let i=0;i<2;i++){
   const output:string[]=[];
   assert.equal(await handleClaudePreToolHook(raw,{HARNESS_SESSION_ID:'pendingtree-session'},decide,line=>output.push(line),()=>undefined),0);
-  assert.deepEqual(output,[]);
+  // An explicit allow: headless Claude would otherwise still refuse the tool itself.
+  assert.deepEqual(output.map(line=>JSON.parse(line)),[{hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow'}}]);
  }
  assert.equal(requests.length,2);
  assert.equal(requests[0]!.requestId,'tool-use-stable-1');
