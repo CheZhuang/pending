@@ -115,7 +115,7 @@ Suggested prompt (it triggers a few safe tool calls and one you will block):
 > Read README.md, add a line "hello from Claude" to it, then run `git push --force`.
 
 For **every** tool call (Read, Edit, Bash, …):
-- **Reviews → Tool approvals** shows the call with a **60-second countdown**. Claude waits.
+- **Approvals** shows the call with a **60-second countdown**. Claude waits.
 - Click **Allow** and Claude continues. Click **Deny** (optionally with a reason) and Claude receives
   `[Harness] Blocked by Gateway: <reason>` and does not run the tool.
 - No decision within 60 s counts as **deny** (`timeout`).
@@ -173,7 +173,7 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 4. **Stop** → the session ends, and the terminal shows the termination.
 5. `npm run agentree -- log --audit`: the auditable record of every decision.
 6. Then the multi-agent part: `npm run demo:real` (section 9) with Claude Code and Codex together, shown on the
-   console's **Reviews** and **Context** pages. Fallback: `npm run demo` with simulated agents.
+   console's **Tasks**, **Conflicts**, **Branches** and **Main history** pages. Fallback: `npm run demo` with simulated agents.
 6. Then `npm run demo` for the multi-agent part: current Main, branch proposals,
    the conflict signal, and a human acceptance/correction.
 
@@ -194,21 +194,25 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 
 ## 9. Claude Code and Codex together (the main demo)
 
-`demo/real-two-agents.ts` drives the same story as `npm run demo`, with real runtimes on the running gateway,
-so everything appears live in the console:
+`demo/real-two-agents.ts` runs the supervision story with real runtimes on the running gateway, so every step
+appears live in the console. The script plays the human only where noted; everything else is you in the console.
 
-1. **Codex** joins on branch `Codex` (owns `src/api`), subscribes to `src/api`, reads `src/api/users.ts` and
-   publishes a Finding located in `src/api/users.ts` whose **impact scope** is `src/auth`.
-2. **Claude** joins on branch `Claude` (owns `src/auth`), subscribes to `src/auth`, calls `context_sync` and
-   receives Codex's Finding through the impact scope. It publishes the decision `token-ttl = 15 minutes` and
-   sends a merge request to main. Then it tries `git push --force`, which **you deny** in the console.
-3. **Codex** proposes the conflicting `token-ttl = 60 minutes` and requests a merge.
-4. **You** resolve the conflict in **Reviews** (pick a side, Resolve & apply).
-5. Both agents `context_sync` again and report the accepted decision.
-6. **You** press **Stop** on the Codex session (terminate the run).
+1. **Codex** joins as a managed session on branch `Codex` (owns `src/api`); its runner starts polling for tasks.
+2. **The human writes Main** (by the script): two expectations, each referencing a file.
+3. **The human dispatches a task to Codex** through `POST /v1/tasks` (the same route as the console's **Tasks**
+   page) with Main attached. Codex edits `src/api/users.ts` and calls `work_propose`. Its file-change approvals
+   wait for you in **Approvals**; the task status moves only on native turn evidence.
+4. **Claude** joins on branch `Claude` (owns `src/auth`): reads Main with `context_get`, edits
+   `src/auth/token.ts`, calls `work_propose`, then tries `git push --force`, which **you deny** in **Approvals**.
+5. **You supervise**: judge the potential conflicts (file evidence) in **Conflicts**, accept Claude's work into
+   Main in **Branches**, and send Codex a correction. The script waits for each step and tells you what to do.
+6. **A follow-up task** asks Codex to `context_sync` and `context_acknowledge`, then report the correction and
+   the current Main rule: the correction and the updated Main reached the agent.
+7. **You** press **Stop** on the Codex session (terminate the run). Afterwards, **Main history** shows every
+   revision and can roll Main back.
 
 **Token cost is kept minimal on purpose:**
-- Claude runs on `haiku` (override with `CLAUDE_MODEL`) with `--max-turns 10` and `--strict-mcp-config`, so only
+- Claude runs on `haiku` (override with `CLAUDE_MODEL`) with `--max-turns 12` and `--strict-mcp-config`, so only
   the Agentree MCP server is loaded.
 - Codex **refuses to start unless `CODEX_MODEL` is set explicitly**, so it can never fall back to the default
   model. Set it to the cheapest model your Codex offers (see the model picker in `codex`). Reasoning effort is
@@ -241,14 +245,13 @@ anything to a model.
 
 The real models may not follow the prompts exactly. Rehearse once, record the successful run as a backup
 video, and keep `npm run demo` as the fallback.
-## Missing for the full real-agent loop
+## Known limits (current backend)
 
-1. **Codex launcher host (B).**
-   - Register a `codex` session (`POST /v1/sessions`).
-   - Start `CodexAppServerAdapter.start({ cwd })` and `startTurn(prompt)`.
-   - Push `readEvents` batches to `POST /v1/events` with the session token, saving the cursor in `SqliteCursorStore`.
-   - Map Stop to `interruptTurn` / `close`.
-
-   Codex tool approvals are not intercepted; the gateway does not claim to control them.
-3. **Claude transcript observation (B).** Ingest Claude Code's session JSONL so messages and non-tool activity
-   show up too. Today only hook-gated tool calls are recorded.
+- **Task dispatch reaches managed Codex only.** Claude Code CLI sessions cannot receive unsolicited tasks; a task
+  to them is recorded as `delivery-unavailable`. Claude gets its work from the prompt it is launched with.
+- **Codex interception is partial.** Command-execution, file-change and Agentree MCP approval callbacks go through
+  the gateway; other Codex tools are observed, not intercepted.
+- **Task status needs native evidence.** `running` / `completed` / `failed` come from native turn events; an
+  interrupted task ends as `failed`, and `outcome-unknown` is never retried automatically.
+- **Corrections are pulled, not pushed.** An agent sees a correction when it calls `context_get` / `context_sync`
+  (the follow-up task in section 9 asks it to); nothing is injected into a running turn.
