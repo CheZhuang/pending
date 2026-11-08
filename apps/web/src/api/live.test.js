@@ -44,6 +44,20 @@ test('local discovery API uses the mock-first contract and same-origin requests'
   assert.equal(request.options.method, 'POST');
 });
 
+test('older Gateway lists registered sessions without claiming native process discovery', async () => {
+  globalThis.fetch = async url => {
+    if (url === '/v1/discovery/agents' || url === '/v1/discovery/refresh') return new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Route not found' } }), { status: 404 });
+    if (url === '/v1/sessions') return new Response(JSON.stringify([{ id: 's', runtime: 'codex-app-server', workspaceId: 'w', state: 'active', taskDispatch: { available: true } }]));
+    if (url === '/v1/workspaces') return new Response(JSON.stringify([{ id: 'w', name: 'project', roots: [{ path: '/repo' }] }]));
+    throw new Error(`Unexpected ${url}`);
+  };
+  const result = await live.discoveredAgents();
+  assert.equal(result.source, 'session-registry');
+  assert.equal(result.agents[0].process, null);
+  assert.equal(result.agents[0].capabilities.canDispatchTasks, true);
+  assert.equal((await live.refreshDiscovery()).source, 'session-registry');
+});
+
 test('restore on an older Gateway is reported as unsupported; real errors pass through with details', async () => {
   respond(400, { error: { code: 'BODY', message: 'Required' } });
   await assert.rejects(() => live.restoreMain('w', { revision: 1, expectedRevision: 7 }), { code: 'UNSUPPORTED' });

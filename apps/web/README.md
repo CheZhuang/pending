@@ -50,3 +50,5 @@ Overview is available without a selected workspace and reads native process disc
 - `operations.canStartManagedAgent` gates the optional start controls. Starting uses `POST /v1/agents/managed` with `{ runtime, cwd? }`.
 
 The UI labels cwd-based workspace matches as inferred, leaves unavailable metadata explicit, and only enables actions listed by the Gateway. Discovery does not imply session ownership or control. No login, pairing, or browser token is used; Gateway origin and access errors use the existing live API error display.
+
+Until the discovery API is present, Overview explicitly shows registered managed sessions from the existing session registry. It does not claim to have scanned native processes in this fallback state.

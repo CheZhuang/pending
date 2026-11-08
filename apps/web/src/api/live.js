@@ -79,8 +79,31 @@ export const live = {
   // Local native process discovery (Person 2 API contract, mock-first).
   // Response: { refreshedAt, agents: [{ id, runtime, process, cwd, workspace,
   // session, activity, capabilities, status }] }. Capabilities are authoritative.
-  discoveredAgents: () => request('/v1/discovery/agents'),
-  refreshDiscovery: () => request('/v1/discovery/refresh', { method: 'POST', body: {} }),
+  discoveredAgents: async () => {
+    try { return await request('/v1/discovery/agents'); }
+    catch (error) {
+      if (!(error instanceof ApiError && error.status === 404 && error.message === 'Route not found')) throw error;
+      const [sessions, workspaces] = await Promise.all([request('/v1/sessions'), request('/v1/workspaces')]);
+      return { refreshedAt: null, source: 'session-registry', agents: sessions.map(session => {
+        const workspace = workspaces.find(item => item.id === session.workspaceId);
+        return {
+          id: session.id, runtime: session.runtime, status: session.state ?? 'unknown', process: null,
+          cwd: workspace?.roots?.[0]?.path ?? null,
+          workspace: workspace ? { id: workspace.id, name: workspace.name, association: 'managed-session' } : null,
+          session: { id: session.id, state: session.state, label: session.label }, activity: null,
+          capabilities: { canInspectActivity: true, canDispatchTasks: session.taskDispatch?.available === true,
+            canReviewApprovals: false, canStop: session.state === 'active' },
+        };
+      }) };
+    }
+  },
+  refreshDiscovery: async () => {
+    try { return await request('/v1/discovery/refresh', { method: 'POST', body: {} }); }
+    catch (error) {
+      if (!(error instanceof ApiError && error.status === 404 && error.message === 'Route not found')) throw error;
+      return live.discoveredAgents();
+    }
+  },
   startManagedAgent: (runtime, cwd) => request('/v1/agents/managed', { method: 'POST', body: { runtime, cwd } }),
 
   events: (workspaceId, { after = 0, limit = 1000 } = {}) =>

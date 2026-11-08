@@ -61,6 +61,7 @@ function stop(agent) {
     </NAlert>
     <div v-else-if="loading && !data" class="center"><NSpin size="large" /></div>
     <template v-else>
+      <NAlert v-if="data?.source === 'session-registry'" type="info" class="notice">Native process discovery is not available on this Gateway yet. Showing registered Agentree sessions only; unmanaged processes and live process metadata are unavailable.</NAlert>
       <div class="refresh-line muted">Last discovery refresh: {{ dateLabel(data?.refreshedAt) ?? 'not reported' }}</div>
       <NEmpty v-if="!agents.length" description="No Claude Code or Codex agents detected" class="empty" />
       <section v-else class="agent-list">
