@@ -113,8 +113,27 @@ function startApprovalHelper(): () => void {
   return () => clearInterval(timer);
 }
 
+type SessionView = { state: string; taskDispatch?: { available?: boolean } };
+/**
+ * The Gateway records a task as not deliverable at submission unless the managed
+ * runner polled within the last few seconds, and never retries it. ManagedCodex.open
+ * returns before the runner's first poll (it first replays startup events), so wait
+ * until the Gateway itself reports the runner as available.
+ */
+async function waitForRunner(sessionId: string, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const session = await api<SessionView>(`/v1/sessions/${sessionId}`).catch(() => undefined);
+    if (session?.taskDispatch?.available) return true;
+    if (session && session.state !== 'active') return false;
+    await sleep(500);
+  }
+  return false;
+}
+
 /** Dispatch a task through the same route as the console's Tasks page, then follow its status. */
 async function dispatch(sessionId: string, instructions: string): Promise<Task> {
+  if (!await waitForRunner(sessionId, 30_000)) say('  ⚠ the Codex runner is not polling the Gateway; this task will be recorded as not deliverable.');
   const created = await api<Task>('/v1/tasks', { sessionId, instructions, includeMain: true, requestId: randomUUID() });
   say(`  task ${created.id.slice(0, 8)} submitted (POST /v1/tasks, Main attached) · ${created.status}`);
   let last = created.status;
@@ -162,7 +181,9 @@ try {
   const workspace = await api<{ id: string; roots: Array<{ id: string }> }>(`/v1/workspaces/${codexSession.workspaceId}`);
   const root = workspace.roots[0]?.id ?? 'root';
   const file = (path: string) => ({ rootId: root, path });
-  say(`  session ${codexSession.id.slice(0, 8)} · model ${codexModel} · runner polling for tasks`);
+  say(`  session ${codexSession.id.slice(0, 8)} · model ${codexModel} · waiting for its task runner to connect…`);
+  if (!await waitForRunner(codexSession.id, 120_000)) throw new Error('The Codex task runner did not connect to the Gateway within 2 minutes; nothing was dispatched. Check that Codex is logged in, then run the demo again.');
+  say('  runner polling for tasks');
 
   step(2, 'The human writes Main: the shared expectations both agents receive');
   const before = await api<{ revision: number }>(`/v1/workspaces/${workspace.id}/main`);
