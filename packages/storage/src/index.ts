@@ -229,6 +229,17 @@ export class SqliteStore {
     return rows.map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
   }
 
+  /** Every observed native event of these sessions, oldest first. Used for file-overlap
+   *  evidence, which must not age out of the short overview window above. */
+  observedSessionEvents(workspaceId: string, sessionIds: string[]): SequencedEvent[] {
+    if (!sessionIds.length) return [];
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`SELECT data,sequence FROM events WHERE workspace_id=?
+      AND json_extract(data,'$.sessionId') IN (${placeholders}) AND json_extract(data,'$.mode')='observed' ORDER BY sequence`)
+      .all(workspaceId,...sessionIds) as Array<{data:string;sequence:number}>;
+    return rows.map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
+  }
+
   transaction<T>(fn: () => T, write = true): T {
     this.db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
     try {
