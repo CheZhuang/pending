@@ -4,13 +4,13 @@ The Console is the human supervision UI, built with Vue 3, Vite, Naive UI, and V
 
 | Page | Purpose |
 | --- | --- |
-| Overview | Discovered local Claude Code and Codex processes, managed sessions, metadata, activity, and supported actions |
+| Overview | Managed sessions with their real controls, plus Claude Code and Codex processes discovered on this computer (metadata only); works without a workspace |
 | Main | Shared reference editing, change previews, removal, entry restoration, provenance, and history |
 | Main history | Global revisions, historical comparisons, and whole-Main or entry restoration |
 | Tasks | Submit instructions with optional Main context, inspect native delivery evidence, and request cancellation |
 | Branches | Branch tree (Main + agent lanes, proposals and merges), proposals, file evidence, recent activity, acceptance/rejection, and corrections |
 | Conflicts | Evidence, human reports, and explained conflict assessments |
-| Activity | Event history and SSE, including observation and approval records |
+| Activity | A recent window of event history plus SSE, older events on demand, including observation and approval records |
 | Approvals | Pending controlled tool calls and their outcomes |
 
 ## Run
@@ -40,13 +40,15 @@ npm --prefix apps/web run preview
 
 See [architecture](../../docs/ARCHITECTURE.md) for supervision rules and [verification](../../docs/SUPERVISION_VERIFICATION.md) for test coverage.
 
-## Local agent discovery API (frontend contract)
+## Local agents (Overview)
 
-Overview is available without a selected workspace and reads native process discovery from the local Gateway. The discovery endpoint is not yet present on `main`; the Console targets this mock-first contract for Person 2's implementation:
+Overview reads two implemented Gateway APIs and needs no selected workspace:
 
-- `GET /v1/discovery/agents` returns `{ refreshedAt, agents, operations? }`.
-- `POST /v1/discovery/refresh` returns the same shape after a discovery scan.
-- Each agent has `id`, `runtime`, `status`, optional `process` (`pid`, `executable`, `startedAt`, `exitedAt`, `exitCode`), `cwd`, optional `workspace` (`id`, `name`, `association`), optional `session` (`id`, `state`, `label`), optional `activity` (`summary`, `observedAt`, `evidence`), and authoritative `capabilities` (`canInspectActivity`, `canDispatchTasks`, `canReviewApprovals`, `canStop`).
-- `operations.canStartManagedAgent` gates the optional start controls. Starting uses `POST /v1/agents/managed` with `{ runtime, cwd? }`.
+- `GET /v1/processes` returns the Gateway's cached computer-wide `ProcessInventory` (`status`, `scannedAt`, `processes`, `message`); `POST /v1/processes/refresh` asks for a new OS scan. See [native discovery](../../docs/NATIVE_DISCOVERY.md). The Console polls the cached inventory every 10 s only while Overview is visible.
+- `GET /v1/sessions` returns managed sessions with lifecycle and `taskDispatch.available`.
 
-The UI labels cwd-based workspace matches as inferred, leaves unavailable metadata explicit, and only enables actions listed by the Gateway. Discovery does not imply session ownership or control. No login, pairing, or browser token is used; Gateway origin and access errors use the existing live API error display.
+A process is linked to a managed session only through the Gateway's `managedSessionId` (launcher-reported identity). Unlinked processes are shown as metadata only, with no task, approval, or stop controls. For managed sessions, task dispatch follows `taskDispatch.available`; approval paths are the ones each integration declares (Claude Code pre-execution hook, Codex selected native callbacks) because the Gateway does not report per-session capabilities.
+
+## Activity history
+
+Selecting a workspace loads a recent window (about 200 events), then follows SSE from the newest sequence. "Load older events" reads further back on demand. The events route pages forward only (`after`, `limit`), and sequences are global across workspaces, so the Console reads sequence ranges below the newest one. Switching workspaces discards in-flight history pages, stream frames and view loads from the previous selection.
