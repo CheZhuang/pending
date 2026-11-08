@@ -23,6 +23,7 @@ const menu = computed(() => [
     { key: 'main', label: () => h(RouterLink, { to: '/main' }, () => 'Main') },
     { key: 'branches', label: () => h(RouterLink, { to: '/branches' }, () => 'Branches') },
     { key: 'conflicts', label: () => h(RouterLink, { to: '/conflicts' }, () => 'Conflicts') },
+    { key: 'tasks', label: () => h(RouterLink, { to: '/tasks' }, () => 'Tasks') },
     { key: 'activity', label: () => h(RouterLink, { to: '/activity' }, () => 'Activity') },
     { key: 'approvals', label: () => h(RouterLink, { to: '/approvals' }, () => 'Approvals') },
 ]);
@@ -57,7 +58,7 @@ onMounted(boot);
         <img src="/favicon.svg" alt="" width="26" height="26" />
         <span>Agentree</span>
       </div>
-      <NMenu :value="route.name" :options="menu" />
+      <NMenu :value="route.meta.menu ?? route.name" :options="menu" />
       <div v-if="!collapsed" class="sider-foot muted">
         <div>{{ state.mode === 'mock' ? 'Mock gateway' : state.baseUrl }}</div>
       </div>

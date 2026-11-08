@@ -33,7 +33,7 @@ async function sendCorrection() {
     <h1 class="page-title">Branches</h1>
     <p class="page-sub">Logical agent work records, independent of Git branches and filesystem layout. Review proposed work before accepting it into Main.</p>
     <NAlert v-if="error" type="error" :title="describe(error).title">{{ describe(error).hint }}</NAlert>
-    <NSelect v-if="branches.length" v-model:value="selected" :options="branches.map(x => ({ label: `${x.branch.name} · ${x.work.filter(w => w.state === 'proposed').length} proposed`, value: x.branch.id }))" style="max-width: 360px; margin-bottom: 14px" />
+    <NSelect v-if="branches.length" :value="current?.branch.id" @update:value="(v) => (selected = v)" :options="branches.map(x => ({ label: `${x.branch.name} · ${x.work.filter(w => w.state === 'proposed').length} proposed`, value: x.branch.id }))" style="max-width: 360px; margin-bottom: 14px" />
     <template v-if="current">
       <NCard size="small" style="margin-bottom: 14px">
         <template #header>{{ current.branch.name }} <span class="muted">· revision {{ current.branch.revision }}</span></template>
