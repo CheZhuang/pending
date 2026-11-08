@@ -20,7 +20,7 @@ export class CodexEventJournal {
     const root = process.platform === 'darwin'
       ? join(homedir(), 'Library', 'Application Support')
       : process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
-    this.path = path ?? join(root, 'agentree', 'codex-journals', `${createHash('sha256').update(threadId).digest('hex')}.json`);
+    this.path = path ?? join(root, 'pendingtree', 'codex-journals', `${createHash('sha256').update(threadId).digest('hex')}.json`);
   }
   load(): z.infer<typeof snapshotSchema> {
     try {

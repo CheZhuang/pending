@@ -11,7 +11,7 @@ import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
 const admin='task-test-admin-token-with-at-least-thirty-two-characters';
 
 test('human dispatch is durable, idempotent, session-bound, and reconciled from native turn evidence',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'agentree-dispatch-'));
+  const dir=await mkdtemp(join(tmpdir(),'pendingtree-dispatch-'));
   const database=join(dir,'db.sqlite');
   let gateway=createGateway({database});
   let url=await listen(gateway);
@@ -67,7 +67,7 @@ async function listen(gateway:ReturnType<typeof createGateway>):Promise<string>{
 async function readHumanToken(database:string):Promise<string>{return (await readFile(`${database}.human-token`,'utf8')).trim();}
 
 test('managed Codex runner consumes a human task through a fake App Server',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'agentree-managed-dispatch-'));
+  const dir=await mkdtemp(join(tmpdir(),'pendingtree-managed-dispatch-'));
   const script=join(dir,'fake.cjs');
   await writeFile(script,`const readline=require('node:readline');let n=0;const send=x=>console.log(JSON.stringify(x));readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(!m.method)return;if(m.method==='thread/start'){send({id:m.id,result:{thread:{id:'fake-native-thread'}}});return}if(m.method==='thread/resume'){send({id:m.id,result:{}});return}if(m.method==='turn/start'){const id='turn-'+(++n);send({id:m.id,result:{turn:{id}}});send({method:'turn/started',params:{threadId:'fake-native-thread',turn:{id,status:'inProgress'}}});setTimeout(()=>send({method:'turn/completed',params:{threadId:'fake-native-thread',turn:{id,status:'completed'}}}),25);return}send({id:m.id,result:{}})});`);
   const gateway=createGateway({database:join(dir,'db.sqlite')});
@@ -91,7 +91,7 @@ test('managed Codex runner consumes a human task through a fake App Server',asyn
 });
 
 test('session task queries and oldest delivery stay isolated after unrelated history grows',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'agentree-dispatch-history-'));
+  const dir=await mkdtemp(join(tmpdir(),'pendingtree-dispatch-history-'));
   const database=join(dir,'db.sqlite');
   const gateway=createGateway({database});const url=await listen(gateway);
   const call=async(path:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${await readHumanToken(database)}`,...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
@@ -115,34 +115,34 @@ test('session task queries and oldest delivery stay isolated after unrelated his
 });
 
 test('startLocal creates the daemon on first run and reuses its local database on repeated startup',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'agentree-start-local-'));
-  const previous={home:process.env.AGENTREE_HOME,port:process.env.PORT,noOpen:process.env.AGENTREE_NO_OPEN};
+  const dir=await mkdtemp(join(tmpdir(),'pendingtree-start-local-'));
+  const previous={home:process.env.PENDINGTREE_HOME,port:process.env.PORT,noOpen:process.env.PENDINGTREE_NO_OPEN};
   const reservation=createServer();
   await new Promise<void>(resolve=>reservation.listen(0,'127.0.0.1',resolve));
   const address=reservation.address();assert.ok(address&&typeof address!=='string');
   const port=address.port;await new Promise<void>(resolve=>reservation.close(()=>resolve()));
-  process.env.AGENTREE_HOME=dir;process.env.PORT=String(port);process.env.AGENTREE_NO_OPEN='1';
+  process.env.PENDINGTREE_HOME=dir;process.env.PORT=String(port);process.env.PENDINGTREE_NO_OPEN='1';
   try{
     const first=await startLocal();
     const firstUrl=new URL(first);
     assert.equal(`${firstUrl.origin}${firstUrl.pathname}`,`http://127.0.0.1:${port}/`);
-    assert.match(firstUrl.hash,/^#agentree-ticket=/);
-    assert.equal((await (await fetch(`${firstUrl.origin}/health`)).json() as {application:string;database:string}).application,'agentree');
+    assert.match(firstUrl.hash,/^#pendingtree-ticket=/);
+    assert.equal((await (await fetch(`${firstUrl.origin}/health`)).json() as {application:string;database:string}).application,'pendingtree');
     const second=await startLocal();
     assert.equal(new URL(second).origin,firstUrl.origin);
     assert.notEqual(new URL(second).hash,firstUrl.hash,'each launcher invocation issues a fresh ticket');
-    process.env.AGENTREE_HOME=join(dir,'different-home');
-    await assert.rejects(startLocal(), /another service or Agentree data directory/);
-    process.env.AGENTREE_HOME=dir;
+    process.env.PENDINGTREE_HOME=join(dir,'different-home');
+    await assert.rejects(startLocal(), /another service or PendingTree data directory/);
+    process.env.PENDINGTREE_HOME=dir;
     assert.equal((await fetch(`${firstUrl.origin}/v1/workspaces`)).status,401,'the returned fragment URL does not grant access until exchanged');
-    const ticket=decodeURIComponent(firstUrl.hash.slice('#agentree-ticket='.length));
+    const ticket=decodeURIComponent(firstUrl.hash.slice('#pendingtree-ticket='.length));
     const exchange=await fetch(`${firstUrl.origin}/v1/console-session`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ticket})});
     assert.equal(exchange.status,200);
     const cookie=exchange.headers.get('set-cookie')!.split(';',1)[0]!;
     assert.equal((await fetch(`${firstUrl.origin}/v1/workspaces`,{headers:{cookie}})).status,200);
   }finally{
     // startLocal deliberately detaches its daemon. Locate only the process
-    // carrying this test's unique AGENTREE_HOME and ask it to shut down.
+    // carrying this test's unique PENDINGTREE_HOME and ask it to shut down.
     if(process.platform==='linux'){
       const fs=await import('node:fs/promises');
       for(const entry of await fs.readdir('/proc')){
@@ -150,13 +150,13 @@ test('startLocal creates the daemon on first run and reuses its local database o
         try{
           const env=await fs.readFile(`/proc/${entry}/environ`,'utf8');
           const cmd=await fs.readFile(`/proc/${entry}/cmdline`,'utf8');
-          if(env.split('\0').includes(`AGENTREE_HOME=${dir}`)&&cmd.includes('src/index.ts'))process.kill(Number(entry),'SIGTERM');
+          if(env.split('\0').includes(`PENDINGTREE_HOME=${dir}`)&&cmd.includes('src/index.ts'))process.kill(Number(entry),'SIGTERM');
         }catch{}
       }
     }
-    if(previous.home===undefined)delete process.env.AGENTREE_HOME;else process.env.AGENTREE_HOME=previous.home;
+    if(previous.home===undefined)delete process.env.PENDINGTREE_HOME;else process.env.PENDINGTREE_HOME=previous.home;
     if(previous.port===undefined)delete process.env.PORT;else process.env.PORT=previous.port;
-    if(previous.noOpen===undefined)delete process.env.AGENTREE_NO_OPEN;else process.env.AGENTREE_NO_OPEN=previous.noOpen;
+    if(previous.noOpen===undefined)delete process.env.PENDINGTREE_NO_OPEN;else process.env.PENDINGTREE_NO_OPEN=previous.noOpen;
     await rm(dir,{recursive:true,force:true});
   }
 });

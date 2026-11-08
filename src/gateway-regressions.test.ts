@@ -14,7 +14,7 @@ let baseUrl: string;
 let database: string;
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'agentree-gateway-regression-'));
+  directory = await mkdtemp(join(tmpdir(), 'pendingtree-gateway-regression-'));
   database = join(directory, 'gateway.sqlite');
   gateway = createGateway({ database,
     consoleOrigins: [consoleOrigin] });

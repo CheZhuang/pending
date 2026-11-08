@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Process entry for the `agentree` CLI: wires real stdout/stderr/env into run().
+// Process entry for the `pendingtree` CLI: wires real stdout/stderr/env into run().
 import { run } from './cli.js';
 
 import { startLocal } from './start.js';

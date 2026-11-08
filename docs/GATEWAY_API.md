@@ -33,7 +33,7 @@ All paths below are under `/v1`. Human HTTP clients send the local human bearer 
 
 Text-only Main edits retain file references; pass `files:[]` to clear them. Main snapshots include `removedEntries` for retained removal history.
 
-`files` contains `{rootId,path}` with canonical workspace-relative paths. Main text may contain project context, expectations or accepted outcomes; no knowledge kind, key, scope or impact scope is required. Explicit `conflictsWithMain` values must identify current Main entries. File overlap is potential evidence. Agentree does not infer semantic incompatibility from matching words.
+`files` contains `{rootId,path}` with canonical workspace-relative paths. Main text may contain project context, expectations or accepted outcomes; no knowledge kind, key, scope or impact scope is required. Explicit `conflictsWithMain` values must identify current Main entries. File overlap is potential evidence. PendingTree does not infer semantic incompatibility from matching words.
 
 **Merge accepts work records into Main. It does not merge Git commits, modify files or execute code.** It does not automatically replace another Main entry. Humans edit the reference explicitly to reconcile conclusions. Main revision checks cover the entire accepted selection. Supervision read models include per-session correction delivery state. Human `GET /workspaces/:id/conflicts?evidence=1` adds bounded current checkout evidence (Git status/diff/history and current file metadata) for referenced paths; this evidence describes the shared workspace checkout and is not branch attribution or semantic conflict resolution.
 

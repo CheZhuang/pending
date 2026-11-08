@@ -22,7 +22,7 @@ interface MainRevisionRecord {
 }
 
 /** Construct only at the trusted daemon boundary. Never deserialize Actor from agent input. */
-export class AgentreeService {
+export class PendingTreeService {
     constructor(readonly store: SqliteStore, private readonly actor: Actor) {}
 
     private get<T>(key: string, kind: string): T {
@@ -468,4 +468,4 @@ export class AgentreeService {
         return result;
     }
 }
-export type ApplicationService = Pick<AgentreeService, 'workspace' | 'branches' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'main' | 'mainHistory' | 'mainAtRevision' | 'editMain' | 'removeMain' | 'restoreMain' | 'proposeWork' | 'branchOverview' | 'conflicts' | 'reportConflict' | 'decideConflict' | 'sendCorrection' | 'merges' | 'decideMerge' | 'supervision' | 'authorize' | 'executeControlled'>;
+export type ApplicationService = Pick<PendingTreeService, 'workspace' | 'branches' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'main' | 'mainHistory' | 'mainAtRevision' | 'editMain' | 'removeMain' | 'restoreMain' | 'proposeWork' | 'branchOverview' | 'conflicts' | 'reportConflict' | 'decideConflict' | 'sendCorrection' | 'merges' | 'decideMerge' | 'supervision' | 'authorize' | 'executeControlled'>;

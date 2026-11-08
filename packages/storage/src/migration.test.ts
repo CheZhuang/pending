@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { SqliteStore } from './index.js';
-import { AgentreeService } from '../../core/src/index.js';
+import { PendingTreeService } from '../../core/src/index.js';
 import type { BranchWork, MainEntry, Workspace } from '../../contracts/src/index.js';
 
 function legacyV1(adoptMain = true) {
-  const directory = mkdtempSync(join(tmpdir(), 'agentree-v1-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pendingtree-v1-'));
   const path = join(directory, 'state.sqlite');
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys=ON');
@@ -46,7 +46,7 @@ function legacyV1(adoptMain = true) {
 }
 
 function legacyV2() {
-  const directory = mkdtempSync(join(tmpdir(), 'agentree-v2-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pendingtree-v2-'));
   const path = join(directory, 'state.sqlite');
   const db = new DatabaseSync(path);
   db.exec(`CREATE TABLE entities(id TEXT PRIMARY KEY,kind TEXT NOT NULL,data TEXT NOT NULL);
@@ -68,7 +68,7 @@ test('v1 migration projects accepted Main and pending local work once, preservin
   let store: SqliteStore | undefined;
   try {
     store = new SqliteStore(f.path);
-    const human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     const main = human.main('w');
     assert.equal(main.revision, 4);
     assert.deepEqual(main.entries.map(e => e.id), ['legacy-main:c2', 'legacy-main:c3', 'legacy-main:c4']);
@@ -85,7 +85,7 @@ test('v1 migration projects accepted Main and pending local work once, preservin
     assert.equal(store.events<{ type?: string }>().filter(e => e.type === 'storage.supervision-migrated').length, 1);
     store.close();
     store = new SqliteStore(f.path);
-    assert.equal(new AgentreeService(store, { type: 'human', id: 'reviewer' }).main('w').entries.length, 3);
+    assert.equal(new PendingTreeService(store, { type: 'human', id: 'reviewer' }).main('w').entries.length, 3);
     assert.equal(store.get<Workspace>('w')!.mainBranchId, 'main');
     assert.equal(store.list<MainEntry>('main-entry').length, 4);
   } finally { store?.close(); rmSync(f.directory, { recursive: true, force: true }); }
@@ -95,7 +95,7 @@ test('v1 workspace without an old Main adopts one and keeps all local content as
   const f = legacyV1(false);
   const store = new SqliteStore(f.path);
   try {
-    const human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     assert.equal(human.main('w').entries.length, 0);
     assert.ok(human.workspace('w').mainBranchId);
     assert.equal(store.get<BranchWork>('legacy-work:c1', 'branch-work')?.state, 'proposed');
@@ -108,13 +108,13 @@ test('v2 migration and restart retain materialized Main and schema version 3', (
   let store: SqliteStore | undefined;
   try {
     store = new SqliteStore(f.path);
-    const human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     assert.equal(human.main('w').entries[0]?.body, 'v2 accepted');
     assert.equal(human.main('w').entries[0]?.legacyCommitId, 'commit');
     assert.equal(Number(store.db.prepare('PRAGMA user_version').get()!.user_version), 3);
     store.close();
     store = new SqliteStore(f.path);
-    assert.equal(new AgentreeService(store, { type: 'human', id: 'reviewer' }).main('w').entries.length, 1);
+    assert.equal(new PendingTreeService(store, { type: 'human', id: 'reviewer' }).main('w').entries.length, 1);
     assert.equal(store.list<MainEntry>('main-entry').length, 1);
   } finally { store?.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
@@ -124,7 +124,7 @@ test('migrated Main can be edited and restored without rewriting legacy evidence
   let store: SqliteStore | undefined;
   try {
     store = new SqliteStore(f.path);
-    let human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    let human = new PendingTreeService(store, { type: 'human', id: 'reviewer' });
     const baseline = human.main('w');
     const originalHistory = human.mainHistory('w', 'legacy-main:c4');
     const originalCommit = store.get('c4', 'commit');
@@ -143,7 +143,7 @@ test('migrated Main can be edited and restored without rewriting legacy evidence
     assert.equal(cleared.removedEntries.length, 4);
     store.close();
     store = new SqliteStore(f.path);
-    human = new AgentreeService(store, { type: 'human', id: 'after-restart' });
+    human = new PendingTreeService(store, { type: 'human', id: 'after-restart' });
     const whole = human.restoreMain('w', 4, 7);
     assert.equal(whole.revision, 8);
     assert.deepEqual(whole.entries.map(e => e.id), baseline.entries.map(e => e.id));

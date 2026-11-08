@@ -1,4 +1,4 @@
-// Vite config for the Agentree Web Console. The live dev mode talks to the
+// Vite config for the PendingTree Web Console. The live dev mode talks to the
 // Gateway on localhost:8787; built assets use the Gateway's same origin.
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';

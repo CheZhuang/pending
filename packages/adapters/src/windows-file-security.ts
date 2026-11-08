@@ -22,7 +22,7 @@ function securityFailure(message: string, error: unknown): Error {
 const identity = `
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$path = $env:AGENTREE_CAPABILITY_PATH
+$path = $env:PENDINGTREE_CAPABILITY_PATH
 `;
 const validate = `
 $acl = $stream.GetAccessControl()
@@ -44,7 +44,7 @@ function run(path: string, script: string, input = ''): string {
   // Absolute system executable, no shell or profile loading, and bounded startup.
   return execFileSync(join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', identity + script], {
-      env: {...process.env, AGENTREE_CAPABILITY_PATH: resolve(path)}, input, encoding: 'utf8',
+      env: {...process.env, PENDINGTREE_CAPABILITY_PATH: resolve(path)}, input, encoding: 'utf8',
       timeout: SECURITY_TIMEOUT_MS, maxBuffer: 32 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     });
 }

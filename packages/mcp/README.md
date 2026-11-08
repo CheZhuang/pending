@@ -1,15 +1,15 @@
-# Agentree MCP
+# PendingTree MCP
 
 The trusted host binds one native session to Core and a delivery ledger:
 
 ```ts
-const service = new AgentreeService(store, { type: 'agent', sessionId: session.id });
-const server = await serveAgentreeMcp({
+const service = new PendingTreeService(store, { type: 'agent', sessionId: session.id });
+const server = await servePendingTreeMcp({
   session, service, ledger: new EntityLedger(store), authorize,
 });
 ```
 
-`store`, `session`, and `authorize` are trusted host dependencies. Import the service from Core, `EntityLedger` from Sync, and `serveAgentreeMcp` from this package. The native entry point supplies `authorize` to revalidate the session credential before every tool call, including cached retries. Embedded hosts must supply equivalent authentication; the callback is optional in the library API.
+`store`, `session`, and `authorize` are trusted host dependencies. Import the service from Core, `EntityLedger` from Sync, and `servePendingTreeMcp` from this package. The native entry point supplies `authorize` to revalidate the session credential before every tool call, including cached retries. Embedded hosts must supply equivalent authentication; the callback is optional in the library API.
 
 ## Tools
 

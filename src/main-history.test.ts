@@ -13,7 +13,7 @@ let baseUrl: string;
 let database: string;
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'agentree-main-history-'));
+  directory = await mkdtemp(join(tmpdir(), 'pendingtree-main-history-'));
   database = join(directory, 'gateway.sqlite');
   gateway = createGateway({ database });
   await new Promise<void>(resolve => gateway.server.listen(0, '127.0.0.1', resolve));

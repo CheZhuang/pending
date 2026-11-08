@@ -7,10 +7,10 @@ import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Session } from '../packages/contracts/src/index.js';
-import { AgentreeService } from '../packages/core/src/index.js';
+import { PendingTreeService } from '../packages/core/src/index.js';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { ingestNextBatch, MemoryCursorStore, MockAgentAdapter, type NativeRecord } from '../packages/adapters/src/index.js';
-import { createAgentreeMcpServer } from '../packages/mcp/src/index.js';
+import { createPendingTreeMcpServer } from '../packages/mcp/src/index.js';
 import { EntityLedger, type ContextDelta } from '../packages/sync/src/index.js';
 import { run } from '../apps/cli/src/cli.js';
 import { Home } from '../apps/cli/src/home.js';
@@ -27,10 +27,10 @@ const codexRecords: NativeRecord[] = [
 ];
 
 class DemoAgent {
-  private constructor(readonly label: string, readonly session: Session, readonly service: AgentreeService, private readonly mcp: Client) {}
+  private constructor(readonly label: string, readonly session: Session, readonly service: PendingTreeService, private readonly mcp: Client) {}
   static async connect(label: string, store: SqliteStore, session: Session) {
-    const service = new AgentreeService(store, { type: 'agent', sessionId: session.id }); const ledger = new EntityLedger(store);
-    const server = createAgentreeMcpServer({ session, service, ledger }); const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const service = new PendingTreeService(store, { type: 'agent', sessionId: session.id }); const ledger = new EntityLedger(store);
+    const server = createPendingTreeMcpServer({ session, service, ledger }); const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const mcp = new Client({ name: label, version: '0.2.0' }); await server.connect(serverSide); await mcp.connect(clientSide);
     return new DemoAgent(label, session, service, mcp);
   }
@@ -47,14 +47,14 @@ class DemoAgent {
 }
 export interface DemoResult { home: string; deliveries: Record<string, ContextDelta[]>; denied: number; }
 
-export async function runDemo(io: DemoIo, home = mkdtempSync(join(tmpdir(), 'agentree-demo-'))): Promise<DemoResult> {
-  const env = { AGENTREE_HOME: home, AGENTREE_USER: 'human-reviewer' }; const say = (s = '') => io.out(s);
+export async function runDemo(io: DemoIo, home = mkdtempSync(join(tmpdir(), 'pendingtree-demo-'))): Promise<DemoResult> {
+  const env = { PENDINGTREE_HOME: home, PENDINGTREE_USER: 'human-reviewer' }; const say = (s = '') => io.out(s);
   const step = (n: number, title: string) => say(`\n━━ ${n}. ${title} ${'━'.repeat(Math.max(3, 64 - title.length))}`);
-  const $ = (...args: string[]) => { say(`$ agentree ${args.join(' ')}`); const lines: string[] = []; const code = run(args, { out: (t) => lines.push(t), err: (t) => lines.push(t), env, cwd: REPO }); if (lines.length) say(lines.join('\n')); return code; };
+  const $ = (...args: string[]) => { say(`$ pendingtree ${args.join(' ')}`); const lines: string[] = []; const code = run(args, { out: (t) => lines.push(t), err: (t) => lines.push(t), env, cwd: REPO }); if (lines.length) say(lines.join('\n')); return code; };
   const json = <T>(...args: string[]): T => { let out = ''; run([...args, '--json'], { out: (t) => out += t, err: () => undefined, env, cwd: REPO }); return (JSON.parse(out) as { data: T }).data; };
   const deliveries: Record<string, ContextDelta[]> = { claude: [], codex: [] };
   const homeStore = () => new Home(home).dbPath;
-  say(`Agentree supervision scenario · isolated state at ${home}`);
+  say(`PendingTree supervision scenario · isolated state at ${home}`);
   step(1, 'Register two independent native sessions'); $('init', 'shop', '--root', `app=${REPO}`); $('branch', 'create', 'claude-auth'); $('branch', 'create', 'codex-api');
   const claudeSession = json<Session>('session', 'register', 'claude-auth', '--agent', 'claude', '--name', 'Claude Code', '--runtime', 'claude', '--native', 'claude-7f3a');
   const codexSession = json<Session>('session', 'register', 'codex-api', '--agent', 'codex', '--name', 'Codex', '--runtime', 'codex', '--native', 'thread-api');

@@ -5,7 +5,7 @@ import { reactive } from 'vue';
 import { api, mode } from './api/index.js';
 import { createWorkspaceController } from './workspace-session.js';
 
-const WS_KEY = 'agentree.console.workspace';
+const WS_KEY = 'pendingtree.console.workspace';
 
 export const state = reactive({
   mode,

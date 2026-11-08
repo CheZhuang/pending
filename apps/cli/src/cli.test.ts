@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { AgentreeService } from '../../../packages/core/src/index.js';
+import { PendingTreeService } from '../../../packages/core/src/index.js';
 import { SqliteStore } from '../../../packages/storage/src/index.js';
 import { run } from './cli.js';
 
 function setup() {
-  const home = mkdtempSync(join(tmpdir(), 'agentree-cli-'));
-  const cli = (...argv: string[]) => { const out: string[] = [], err: string[] = []; const code = run(argv, { out: t => out.push(t), err: t => err.push(t), env: { AGENTREE_HOME: home, AGENTREE_USER: 'reviewer' }, cwd: '/repo' }); return { code, out: out.join('\n'), err: err.join('\n'), json: () => JSON.parse(out.join('\n')) }; };
+  const home = mkdtempSync(join(tmpdir(), 'pendingtree-cli-'));
+  const cli = (...argv: string[]) => { const out: string[] = [], err: string[] = []; const code = run(argv, { out: t => out.push(t), err: t => err.push(t), env: { PENDINGTREE_HOME: home, PENDINGTREE_USER: 'reviewer' }, cwd: '/repo' }); return { code, out: out.join('\n'), err: err.join('\n'), json: () => JSON.parse(out.join('\n')) }; };
   return { home, cli, close: () => rmSync(home, { recursive: true, force: true }) };
 }
 
@@ -46,7 +46,7 @@ test('human supervises proposed work, conflict disposition, correction, and Main
     const w = f.cli('init', 'demo', '--root', 'app=/repo', '--json').json().data; f.cli('branch', 'create', 'a'); f.cli('branch', 'create', 'b');
     const a = f.cli('session', 'register', 'a', '--agent', 'a', '--runtime', 'mock', '--native', 'na', '--json').json().data;
     f.cli('session', 'register', 'b', '--agent', 'b', '--runtime', 'mock', '--native', 'nb');
-    const store = new SqliteStore(join(f.home, 'gateway.sqlite')); const agent = new AgentreeService(store, { type: 'agent', sessionId: a.id });
+    const store = new SqliteStore(join(f.home, 'gateway.sqlite')); const agent = new PendingTreeService(store, { type: 'agent', sessionId: a.id });
     const main = f.cli('main', 'add', 'Use the x-request-id header', '--file', 'app=src/api.ts', '--json').json().data;
     const work = agent.proposeWork(a.branchId, { body: 'Changed the response header', files: [{ rootId: 'app', path: 'src/api.ts' }], conflictsWithMain: [main.id] });
     const listed = f.cli('work', 'list', 'a', '--json').json().data; assert.equal(listed.length, 1);
@@ -68,7 +68,7 @@ test('native event activity remains queryable and usage errors are readable', ()
   try {
     f.cli('init', 'demo', '--root', 'app=/repo'); f.cli('branch', 'create', 'a');
     const s = f.cli('session', 'register', 'a', '--agent', 'a', '--runtime', 'mock', '--native', 'native-a', '--json').json().data;
-    const store = new SqliteStore(join(f.home, 'gateway.sqlite')); const svc = new AgentreeService(store, { type: 'agent', sessionId: s.id });
+    const store = new SqliteStore(join(f.home, 'gateway.sqlite')); const svc = new PendingTreeService(store, { type: 'agent', sessionId: s.id });
     svc.ingest({ id: 'event-1', workspaceId: s.workspaceId, source: 'mock', nativeId: 'event-1', sessionId: s.id, type: 'tool.call', mode: 'observed', payload: { tool: 'Edit', input: { file_path: '/repo/a.ts' } }, occurredAt: new Date().toISOString() }); store.close();
     assert.match(f.cli('log', '--session', 'native-a').out, /Edit \/repo\/a\.ts/);
     assert.equal(f.cli('correction', 'send', 'missing', 'hello').code, 4);
@@ -77,12 +77,12 @@ test('native event activity remains queryable and usage errors are readable', ()
 });
 
 test('managed session identity environment cannot be overridden with --as', () => {
-  const home = mkdtempSync(join(tmpdir(), 'agentree-managed-cli-'));
+  const home = mkdtempSync(join(tmpdir(), 'pendingtree-managed-cli-'));
   try {
     const out: string[] = [], err: string[] = [];
     const code = run(['--as', 'another-session', 'status'], {
       out: text => out.push(text), err: text => err.push(text),
-      env: { AGENTREE_HOME: home, AGENTREE_USER: 'reviewer', HARNESS_SESSION_ID: 'managed-session', HARNESS_SESSION_TOKEN: 'managed-token' },
+      env: { PENDINGTREE_HOME: home, PENDINGTREE_USER: 'reviewer', HARNESS_SESSION_ID: 'managed-session', HARNESS_SESSION_TOKEN: 'managed-token' },
       cwd: '/repo',
     });
     assert.equal(code, 3);

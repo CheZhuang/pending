@@ -45,11 +45,11 @@ async function pendingCorrectionContext(sessionId: string, env: ClaudeHookEnviro
     if (!batch.length) return undefined;
     const itemIds = batch.map(item => item.itemId);
     return { itemIds, text: [
-      'New human correction(s) for this Agentree branch arrived during your work. Treat them as current human direction, reconsider affected work, and acknowledge each item through Agentree context_acknowledge after reading it.',
+      'New human correction(s) for this PendingTree branch arrived during your work. Treat them as current human direction, reconsider affected work, and acknowledge each item through PendingTree context_acknowledge after reading it.',
       ...batch.map(item => `[${item.itemId}] ${item.value.body}`),
     ].join('\n\n') };
   } catch (error) {
-    diagnostic(`[Agentree] Could not check or inject branch corrections: ${error instanceof Error ? error.message : String(error)}`);
+    diagnostic(`[PendingTree] Could not check or inject branch corrections: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }
@@ -118,9 +118,9 @@ export async function handleClaudePreToolHook(
             method: 'POST', headers: { authorization: `Bearer ${env.HARNESS_SESSION_TOKEN}`, 'content-type': 'application/json' },
             body: JSON.stringify({ itemIds: correction.itemIds }), signal: AbortSignal.timeout(5000),
           });
-          if (!response.ok) diagnostic(`[Agentree] Correction context was injected but its Gateway receipt returned HTTP ${response.status}.`);
+          if (!response.ok) diagnostic(`[PendingTree] Correction context was injected but its Gateway receipt returned HTTP ${response.status}.`);
         } catch (error) {
-          diagnostic(`[Agentree] Correction context was injected but its Gateway receipt failed: ${error instanceof Error ? error.message : String(error)}`);
+          diagnostic(`[PendingTree] Correction context was injected but its Gateway receipt failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       return 0;

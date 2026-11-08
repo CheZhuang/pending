@@ -14,7 +14,7 @@ let baseUrl: string;
 let consoleOrigin: string;
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'agentree-local-first-'));
+  directory = await mkdtemp(join(tmpdir(), 'pendingtree-local-first-'));
   database = join(directory, 'gateway.sqlite');
   await startGateway();
 });
@@ -61,7 +61,7 @@ test('browser origins must be local or explicitly configured, and cross-site met
   const { ticket } = await ticketResponse.json() as { ticket: string };
   const exchange = await request('/v1/console-session', { method: 'POST', headers: { origin: consoleOrigin }, body: { ticket } });
   assert.equal(exchange.status, 200);
-  assert.match(exchange.headers.get('set-cookie') ?? '', /agentree_console=.*HttpOnly.*SameSite=Strict.*Path=\//i);
+  assert.match(exchange.headers.get('set-cookie') ?? '', /pendingtree_console=.*HttpOnly.*SameSite=Strict.*Path=\//i);
   const cookie = (exchange.headers.get('set-cookie') ?? '').split(';', 1)[0]!;
   const browserWrite = await request('/v1/workspaces', { method: 'POST', headers: { origin: consoleOrigin, cookie }, body: { name: 'browser workspace', roots: [] } });
   assert.equal(browserWrite.status, 201, 'a configured loopback console origin may write');

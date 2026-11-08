@@ -4,7 +4,7 @@
 // registers the session, installs the PreToolUse hook for this run only, and stops
 // Claude when a human presses Stop. Requires `npm run build` and Node 24+.
 //
-//   cd ~/agentree-playground
+//   cd ~/pendingtree-playground
 //   node /path/to/pending/demo/managed-claude.mjs --label "Claude A" [-- <claude args>]
 
 const argv = process.argv.slice(2);
@@ -20,7 +20,7 @@ let runManagedClaude;
 try {
   ({ runManagedClaude } = await import('../dist/packages/adapters/src/claude-launcher.js'));
 } catch {
-  console.error('Build the repository first: npm ci && npm run build (in the Agentree repo).');
+  console.error('Build the repository first: npm ci && npm run build (in the PendingTree repo).');
   process.exit(2);
 }
 

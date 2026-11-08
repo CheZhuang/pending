@@ -27,7 +27,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
 });`;
 
 async function fixture() {
- const dir=await mkdtemp(join(tmpdir(),'agentree-regression-'));
+ const dir=await mkdtemp(join(tmpdir(),'pendingtree-regression-'));
  const script=join(dir,'rpc.cjs');await writeFile(script,fakeRpc);
  return {dir, options:(marker:string)=>({command:process.execPath,cwd:dir,args:[script,marker],journalPath:join(dir,'journal.json')})};
 }
@@ -69,7 +69,7 @@ test('uncheckpointed observations replay with their original IDs after restart',
 });
 
 test('source Claude launcher executes its hook from an unrelated project directory',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'agentree-claude-regression-'));
+ const dir=await mkdtemp(join(tmpdir(),'pendingtree-claude-regression-'));
  const child=join(dir,'fake-claude.cjs');let ended=false;let reported:{exitCode:number|null;signal:string|null}|undefined;
  try {
   await writeFile(child,`#!${process.execPath}\nconst fs=require('node:fs');const cp=require('node:child_process');if(process.env.HARNESS_SESSION_TOKEN!=='managed-session-token')process.exit(3);const settings=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));const out=cp.execSync(settings.hooks.PreToolUse[0].hooks[0].command,{input:'{}',encoding:'utf8'});if(JSON.parse(out).hookSpecificOutput.permissionDecision!=='deny')process.exit(2);`,{mode:0o700});
@@ -88,17 +88,17 @@ test('Claude PreToolUse retries retain the native tool_use_id as requestId', asy
  const decide=async(request:typeof requests[number])=>{requests.push(request);return {outcome:'allow' as const};};
  for(let i=0;i<2;i++){
   const output:string[]=[];
-  assert.equal(await handleClaudePreToolHook(raw,{HARNESS_SESSION_ID:'agentree-session'},decide,line=>output.push(line),()=>undefined),0);
+  assert.equal(await handleClaudePreToolHook(raw,{HARNESS_SESSION_ID:'pendingtree-session'},decide,line=>output.push(line),()=>undefined),0);
   assert.deepEqual(output,[]);
  }
  assert.equal(requests.length,2);
  assert.equal(requests[0]!.requestId,'tool-use-stable-1');
  assert.equal(requests[1]!.requestId,requests[0]!.requestId);
- assert.equal(requests[0]!.sessionId,'agentree-session');
+ assert.equal(requests[0]!.sessionId,'pendingtree-session');
 });
 
 test('Claude launcher responds to session.kill-requested and reports observed child exit',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'agentree-claude-kill-regression-'));
+ const dir=await mkdtemp(join(tmpdir(),'pendingtree-claude-kill-regression-'));
  const child=join(dir,'waiting-claude.cjs');const ready=join(dir,'ready');
  let reported:{exitCode:number|null;signal:string|null}|undefined;
  try{

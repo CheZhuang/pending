@@ -16,7 +16,7 @@ export interface SyncItem<T> {
   value: T;
 }
 export interface ContextDelta {
-  kind: 'agentree.supervision-delta';
+  kind: 'pendingtree.supervision-delta';
   sessionId: string;
   notice: string;
   items: Array<SyncItem<MainSnapshot | BranchWork | Correction | Conflict>>;
@@ -66,7 +66,7 @@ export class ContextSync {
       rec.state = 'delivered'; rec.deliveredAt = new Date().toISOString(); rec.attempts += 1;
     }
     const delta: ContextDelta = {
-      kind: 'agentree.supervision-delta', sessionId: request.session.id,
+      kind: 'pendingtree.supervision-delta', sessionId: request.session.id,
       notice: 'Main is the current human-governed reference and each Main item replaces the prior Main snapshot. Branch work is proposed evidence; corrections are human messages. Retrieval and acknowledgement do not prove an agent followed guidance.',
       items: selected, mainRevision: view.main.revision,
       stats: { available: all.length, delivered: selected.length, deferred: Math.max(0, candidates.length - selected.length) },

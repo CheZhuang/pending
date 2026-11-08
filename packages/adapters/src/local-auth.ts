@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { createWindowsCapability, readWindowsCapability } from './windows-file-security.js';
 
 export function localDatabasePath(): string {
-  return join(process.env.AGENTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree'), 'gateway.sqlite');
+  return join(process.env.PENDINGTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'pendingtree'), 'gateway.sqlite');
 }
 
 /** Trusted OS-local capability, never supplied to a managed child or served over HTTP. */

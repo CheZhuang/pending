@@ -1,11 +1,11 @@
 # Core integration
 
-Construct `AgentreeService` from [src/index.ts](src/index.ts) with an entity store and a trusted actor. `ApplicationService` is a TypeScript interface type, not a constructor. Use records and validation from [Contracts](../contracts/README.md).
+Construct `PendingTreeService` from [src/index.ts](src/index.ts) with an entity store and a trusted actor. `ApplicationService` is a TypeScript interface type, not a constructor. Use records and validation from [Contracts](../contracts/README.md).
 
 ```ts
-import { AgentreeService } from './src/index.js';
+import { PendingTreeService } from './src/index.js';
 
-const service = new AgentreeService(store, { type: 'human', id: 'local-admin' });
+const service = new PendingTreeService(store, { type: 'human', id: 'local-admin' });
 const snapshot = service.main(workspaceId);
 service.editMain(workspaceId, { body: 'Preserve public API compatibility.' }, snapshot.revision);
 ```

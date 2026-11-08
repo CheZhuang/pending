@@ -11,7 +11,7 @@ const BASE = (ENV.VITE_GATEWAY_URL || (ENV.DEV ? 'http://localhost:8787' : '')).
 const consoleReady = (async () => {
   if (typeof window === 'undefined') return;
   const fragment = new URLSearchParams(window.location.hash.slice(1));
-  const ticket = fragment.get('agentree-ticket');
+  const ticket = fragment.get('pendingtree-ticket');
   if (!ticket) return;
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
   const response = await fetch(`${BASE}/v1/console-session`, {

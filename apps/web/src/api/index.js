@@ -3,7 +3,7 @@
 import { live } from './live.js';
 import { createMock } from './mock.js';
 
-const KEY = 'agentree.console.apiMode';
+const KEY = 'pendingtree.console.apiMode';
 
 function initialMode() {
   const fromUrl = new URLSearchParams(location.search).get('api');

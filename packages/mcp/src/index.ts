@@ -22,12 +22,12 @@ function tool<T>(work: (args: T) => unknown, authorize?: () => Promise<void>) {
 }
 
 /** MCP server bound to one trusted native session. Agents can read and propose work only. */
-export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
+export function createPendingTreeMcpServer(binding: BoundMcpSession): McpServer {
   const session = { ...binding.session };
   const { service } = binding;
   const sync = new ContextSync(service, binding.ledger);
   const bound = <T>(fn: (args: T) => unknown) => tool(fn, binding.authorize);
-  const server = new McpServer({ name: 'agentree', version: '0.2.0' });
+  const server = new McpServer({ name: 'pendingtree', version: '0.2.0' });
 
   server.registerTool('workspace_status', {
     title: 'Workspace status', description: 'Show the workspace and logical branches bound to this session.',
@@ -63,6 +63,6 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
 
   return server;
 }
-export async function serveAgentreeMcp(binding: BoundMcpSession): Promise<McpServer> {
-  const server = createAgentreeMcpServer(binding); await server.connect(new StdioServerTransport()); return server;
+export async function servePendingTreeMcp(binding: BoundMcpSession): Promise<McpServer> {
+  const server = createPendingTreeMcpServer(binding); await server.connect(new StdioServerTransport()); return server;
 }

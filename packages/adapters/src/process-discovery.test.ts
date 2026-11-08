@@ -178,7 +178,7 @@ test('Windows command-line splitting preserves quoted executable and argument pa
 });
 
 test('Linux local provider observes an official Node CLI process with birth identity and removes it after exit', { skip: process.platform !== 'linux' }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'agentree-discovery-provider-'));
+  const directory = await mkdtemp(join(tmpdir(), 'pendingtree-discovery-provider-'));
   tempDirs.push(directory);
   const script = join(directory, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
   await mkdir(join(directory, 'node_modules', '@openai', 'codex', 'bin'), { recursive: true });

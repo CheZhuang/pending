@@ -1,13 +1,13 @@
 {
-  "name": "@agentree/cli",
+  "name": "@pendingtree/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "agentree": "./src/main.ts" },
+  "bin": { "pendingtree": "./src/main.ts" },
   "dependencies": {
-    "@agentree/contracts": "workspace:*",
-    "@agentree/core": "workspace:*",
-    "@agentree/storage": "workspace:*",
-    "@agentree/sync": "workspace:*"
+    "@pendingtree/contracts": "workspace:*",
+    "@pendingtree/core": "workspace:*",
+    "@pendingtree/storage": "workspace:*",
+    "@pendingtree/sync": "workspace:*"
   }
 }

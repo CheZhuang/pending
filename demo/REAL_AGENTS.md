@@ -22,7 +22,7 @@ npm run smoke:native -- codex
 
 Each command starts a temporary Gateway and prints an evidence path. Both check session binding, native observation, and a real MCP work proposal. The Codex smoke also submits a task through the dispatch API and waits for matching terminal native evidence. No preexisting Gateway is needed.
 
-The smoke approval helper allows Agentree MCP calls and literal reads of its synthetic fixture; other requested tools are denied. Save the printed evidence when reporting results. Fixture-based tests do not establish that these live checks passed on your machine.
+The smoke approval helper allows PendingTree MCP calls and literal reads of its synthetic fixture; other requested tools are denied. Save the printed evidence when reporting results. Fixture-based tests do not establish that these live checks passed on your machine.
 
 ## Real two-agent demo
 
@@ -37,6 +37,6 @@ Preflight checks dependencies and seeds the playground without model calls. The 
 
 Use Approvals for supported tool decisions, Branches for acceptance/corrections, Conflicts for assessment, Tasks for delivery evidence, and Main history for revision inspection and restoration.
 
-`CODEX_MODEL` is required. Claude defaults to `haiku` (override with `CLAUDE_MODEL`). The playground defaults to `~/agentree-two-agents` (override with `PLAYGROUND`). The helper approves Agentree MCP calls automatically; use `--manual` to review those too. Other controlled calls wait for human review. Live model behavior remains unverified by deterministic tests.
+`CODEX_MODEL` is required. Claude defaults to `haiku` (override with `CLAUDE_MODEL`). The playground defaults to `~/pendingtree-two-agents` (override with `PLAYGROUND`). The helper approves PendingTree MCP calls automatically; use `--manual` to review those too. Other controlled calls wait for human review. Live model behavior remains unverified by deterministic tests.
 
 See [verification](../docs/SUPERVISION_VERIFICATION.md) for validation scope.
