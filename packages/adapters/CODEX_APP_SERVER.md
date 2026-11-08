@@ -1,17 +1,25 @@
-# Codex App Server integration
+# Codex App Server
 
-`CodexAppServerAdapter` uses the local `codex app-server --listen stdio://` process. It initializes over newline-delimited JSON-RPC, then starts a new thread or resumes a thread ID already known to the trusted Agentree launcher. It normalizes App Server notifications into `observed` events.
+The local integration has two layers: `CodexAppServerAdapter` implements the native transport, while `ManagedCodex` binds it to Gateway sessions, MCP, approvals, task delivery, and durable ingestion. User-facing launch examples are in [native setup](../../docs/NATIVE_AGENTS.md).
 
-The adapter reports `managedSession: true` because Agentree starts or resumes the app-server thread. It reports `contextInjection: false` and `preExecutionInterception: false`: this implementation does not yet send Agentree context into turns or route Codex tool approvals through Agentree policy. It cannot attach to or control arbitrary Codex CLI processes started outside this adapter.
+## Low-level adapter
 
-Use `startTurn()` to begin work in a managed thread and `interruptTurn()` to interrupt a known turn. On a transport failure, call `reconnect()`; it starts a new app-server process, initializes it, and resumes the same thread. If the Agentree process itself restarts, pass the durable event cursor as `initialCursor` to `resume()` so event sequence numbers continue from the saved position.
+[CodexAppServerAdapter](src/codex-app-server.ts) starts `codex app-server --listen stdio://`, initializes newline-delimited JSON-RPC, and starts or resumes a trusted thread ID. `startTurn`, `interruptTurn`, and `reconnect` operate on that managed thread; it cannot attach to arbitrary external CLI/Desktop conversations.
 
-The app-server event stream uses opaque notification method names and JSON params. The adapter preserves the method and params in each event payload instead of assuming every notification kind has a fixed shape. Cursor state can be stored with `SqliteCursorStore`, which uses the existing generic entity storage API and does not add a private SQL table.
+Notifications become observed events retaining their method and params. Capabilities declare `managedSession: true`, `contextInjection: false`, and `preExecutionInterception: false`; the adapter alone does not install Agentree context or offer blanket interception.
 
-Protocol references: [Codex App Server – OpenAI Developers](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) describes stdio JSON messages, initialization, `thread/start`, `thread/resume`, `turn/start`, and event notifications. The broader [Codex as a platform article](https://developers.openai.com/blog/codex-as-a-platform) identifies app-server as the managed integration surface.
+Server requests are distinguished from responses even when IDs overlap. Without an `onServerRequest` handler, command/file approvals are declined, permission grants are empty, and unsupported requests receive a JSON-RPC error.
 
-## Recovery and server requests
+## Managed host
 
-Observations are written to an atomic local journal before ingestion. The default path is the user application-data directory under `agentree/codex-journals`; `journalPath` allows a host to select another application-data path. SQLite remains the domain source of truth; the journal is a delivery spool. Acknowledgement removes delivered records only after the Gateway cursor is saved. Unacknowledged records retain their event IDs across process restarts, while each new observation receives a UUID independent of its cursor sequence. The journal assumes one active owner per native thread. It cannot reconstruct notifications lost before they reach the adapter.
+[ManagedCodex](src/codex-managed.ts) completes a restricted read-only initialization turn with Agentree MCP disabled, registers the actual native thread with Gateway, and resumes it with session-bound Agentree MCP. It ingests observations, handles supported command/file approval and Agentree MCP elicitation callbacks through Gateway, polls human-submitted tasks, and handles interruption/stop requests. Other tools have no general interception guarantee.
 
-App Server requests are distinguished from responses even when their IDs overlap. Without a configured `onServerRequest` handler, command and file-change approvals are declined, permission grants are empty, and unsupported requests receive a JSON-RPC error. A trusted host can provide its own approval handler.
+Private registration files retain the connection needed to resume an active session. `resumeFile` reattaches that session after validating Gateway, working directory, and database identity. Normal `close()` ends the Gateway session, so it cannot subsequently resume. Default managed state is `~/.local/share/agentree/native`; override with `stateDirectory`.
+
+## Recovery
+
+The adapter journals observations atomically before ingestion. Its standalone default journal directory is `~/.local/share/agentree/codex-journals`; managed sessions supply a journal under their state directory. SQLite remains the domain source of truth.
+
+Acknowledgment drops delivered journal records only after the Gateway cursor is saved. Unacknowledged events retain IDs across process restarts; new observations receive UUIDs independent of sequence. `initialCursor` continues sequences after restart, and `SqliteCursorStore` persists cursor state. The journal assumes one active owner per thread and cannot recover notifications lost before reaching the adapter.
+
+See [task dispatch](../../docs/TASK_DISPATCH_API.md) for delivery states and uncertain outcomes after interruption or restart.

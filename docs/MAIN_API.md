@@ -1,6 +1,6 @@
 # Main editing and history contract
 
-Base path: `/v1/workspaces/:workspaceId/main`. Use the existing admin bearer or paired Console cookie for writes. Session credentials may read their own workspace; agents cannot edit or restore Main. Actor identity always comes from Gateway authentication.
+Base path: `/v1/workspaces/:workspaceId/main`. Use the [Gateway authentication](GATEWAY_API.md) admin bearer or paired Console cookie for writes. Session credentials may read their own workspace; agents cannot edit or restore Main. Actor identity always comes from Gateway authentication.
 
 | Method and path | Request | Response |
 | --- | --- | --- |
@@ -22,11 +22,11 @@ Restoration selects the state **at a global revision**, not an entry-local versi
 
 Every successful restoration advances Main by exactly one, even when the selected contents equal current contents. All affected entries share that new revision, and the operation is atomic. Entry versions, their original actors, acceptance/source-work references and legacy evidence remain immutable. New versions identify the restoring human and timestamp, retain `sourceWorkId`/`legacyCommitId`, and carry `restoredFrom:{revision,entryRevision?}` pointing to their source. `entryRevision` is absent when a later-created entry is tombstoned because it did not exist at R. Global history records `revision`, `actor`, `createdAt`, `entryIds`, and optional `restoredFromRevision`; a whole restoration of empty Main is recorded too.
 
-Historical snapshots use the immutable entry versions already persisted by the supervision refactor. Migrated legacy versions retain the supervision migration's projected removed states and legacy authorship; the API does not invent missing pre-migration edit history. Existing schema version 3 data remains valid, with no rewriting of historical rows.
+Historical snapshots use retained immutable entry versions. See [migration](MIGRATION.md) for legacy history limits and schema compatibility.
 
 ContextSync publishes each restored Main as a new complete snapshot under its new revision. Authenticated MCP `context_get` and new `context_sync` requests see it through the existing read boundary (a retry of the same sync request ID retains its cached response).
 
-Examples (relative paths):
+Examples (include the appropriate authentication header; replace `W` and `E` with actual IDs):
 
 ```http
 POST /v1/workspaces/W/main/E

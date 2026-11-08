@@ -1,49 +1,42 @@
-# Supervision refactor verification
+# Verification
 
-Verified on 2026-11-07 with Node.js 24.22.1. Work started from freshly fetched `origin/main` at `29da559` on `feature/agent-supervision`. Luna agents explored the existing flows, implemented the repetitive Console/integration changes and developed replacement tests. The primary agent made the domain/API/migration decisions and reviewed their implementation.
+Run commands from the repository root with Node.js 24+. Install backend dependencies with `npm ci` and Console dependencies with `npm ci --prefix apps/web`.
 
-## Results
+## Checks
 
-| Check | Result |
+| Command | Coverage |
 | --- | --- |
-| `npm run typecheck` | Pass, including test sources |
-| `npm run build` | Pass |
-| `npm test` | 40 tests pass; Core, migration, Sync, MCP, CLI, native adapter, HTTP/SSE and demo coverage |
-| `npm run demo` | Pass; two session-bound MCP clients, native observation fixtures, human correction and acceptance |
-| `npm --prefix apps/web test` | 5 tests pass; mock supervision workflow and stale edit/removal safeguards |
-| `npm --prefix apps/web run build` | Pass, Vue/Vite production bundle |
-| `git diff --check` | Pass |
+| `npm run typecheck` | Backend source and test types |
+| `npm test` | Core, migration, Sync, MCP, CLI, adapters, Gateway HTTP/SSE, tasks, and deterministic demo |
+| `npm run build` | Backend production compilation |
+| `npm run demo` | Two-session supervision walkthrough without model calls |
+| `npm --prefix apps/web test` | Mock supervision workflow and Main edit/removal safeguards |
+| `npm --prefix apps/web run build` | Vue/Vite production bundle |
+| `git diff --check` | Patch whitespace |
 
-HTTP/native tests required local loopback networking outside this environment's restricted sandbox. The sandboxed Node process otherwise aborts before HTTP assertions with an internal callback assertion; the authorized loopback test run passes. This is not treated as a passing sandboxed run. Console dependencies were installed from its committed lockfile to run the production build. CI now runs the Console workflow tests and production build in addition to the backend checks; the hosted CI job itself has not been run in this local session.
+CI runs backend typechecking, tests, and build plus Console tests/build. A local pass does not establish a hosted CI result.
 
-## Acceptance scenarios
+## Latest local validation
 
-1. **Human Main expectation:** Core/HTTP tests create an expectation directly, preserve immutable revision history, reject agent writes and stale human writes. Both session-bound MCP clients in the demo retrieve the authoritative Main snapshot. Sync tests cover text updates and removals replacing the previous reference.
-2. **Claude/Codex overlap:** native-shaped Claude tool inputs, Codex file-change notifications and normalized touches map to rooted files. Core and demo tests expose overlaps as potential conflicts. A regression verifies declared files and native observations use the same identity across nested roots. Read-only touches and unknown/outside paths do not create write evidence.
-3. **Explicit Main incompatibility:** proposals cite current Main entry IDs, or humans report an incompatibility. Humans supply an assessment to confirm, resolve or dismiss; they can edit Main or record a branch-addressed correction. MCP retrieves the correction. Matching prose alone does not generate semantic conflict claims.
-4. **Acceptance into Main:** a human accepts selected pending work records atomically, preserving source work links and updating Main for other sessions. Stale, duplicate/invalid and nonhuman decisions fail; rejection does not update Main. No Git operations or project-file writes are involved.
-5. **Monitoring and native boundaries:** tests retain secure native session binding, event deduplication/restart replay, native request IDs, supported Codex approval callbacks, Claude pre-execution hooks, tool approvals/timeouts, kill requests versus observed exits, Console origin/cookie protection, audit history and resumable SSE.
+Before pulling the latest Console changes, the documentation refresh on 2026-11-07 used Node.js 24.22.1. Typechecking, backend build, deterministic demo, Console tests on the pre-refresh base (2 test files), and Console build passed. The backend suite passed all 59 tests outside the restricted sandbox.
 
-The migration suite covers version 1 with and without an existing Main, version 2 upgrade, canonical legacy file paths, preservation of native event sequences and original immutable records, unaccepted legacy proposals, history immutability and database reopen without duplication. Sync tests verify durable retries/acknowledgments and that legacy delivery caches cannot replay into the replacement protocol.
+The sandboxed backend run aborted inside Node with an `InternalCallbackScope` assertion before usable test results. The successful rerun used local loopback networking outside that sandbox; the sandboxed attempt is not counted as passing. Documentation checks resolved local Markdown links and heading anchors and checked that prose is English.
 
-The Console test suite covers Main creation/edit/removal/history, stale writes, acceptance, conflict assessment and preserved approvals. Separate regressions ensure an entry removed during editing cannot be recreated silently and an edit cannot move to another workspace. Production compilation covers every Vue view. This verification does **not** include browser-driven click automation.
+After pulling `main` at `811bfd4`, the updated Console suite (6 test files) and production build also passed. Documentation was reconciled with the new history, task, and live-demo workflows.
 
-## Review corrections incorporated
+## Behavioral coverage
 
-- Main sync uses replacement snapshots keyed by revision, so edits and removals are delivered.
-- A new delivery-ledger namespace prevents old cached knowledge deltas from resurfacing.
-- Native/declared files use canonical rooted identity; overlap remains potential evidence.
-- Core authorization applies to MCP acknowledgment metadata as well as content reads.
-- Main text-only edits retain file references; native branch listings exclude Main's internal revision head.
-- Console edits retain their opening revision and entry identity through SSE refresh/removal; history responses are tied to the current selection/workspace.
-- Activity labels distinguish observations, Gateway interception decisions and runtime-reported results. Approval does not claim successful execution.
+- Human Main editing/removal, immutable entry/global history, historical preview, atomic restoration, provenance, stale revisions, and agent denial.
+- Session-bound MCP retrieval of Main, sibling work, and targeted corrections; persisted retries and acknowledgment; delivery-cache isolation after migration.
+- Rooted declared/native write overlap, nested roots, read-only/outside-path exclusion, durable evidence beyond the activity window, and retained human dispositions.
+- Atomic work acceptance/rejection, explicit Main incompatibility, human conflict assessment, and corrections.
+- Version 1/2 migration, restart persistence, legacy provenance, and event deduplication.
+- Native request identity, supported approval callbacks, Claude hooks, stop requests versus reported exits, timeouts, Console cookies/origins, audit events, and resumable SSE.
+- Durable task submission, retry identity, session isolation, cancellation, uncertain delivery, and matching native turn evidence. The managed Codex delivery test uses a fake App Server.
+- Console Main workflows, acceptance, conflict assessment, and approvals, including edits invalidated by removal or workspace changes.
 
-## Limits and compatibility
+## Limits
 
-Real authenticated Claude Code/Codex smoke runs were **not** executed in this refactor. The live smoke script now uses `work_propose` and the branch work endpoint; it requires installed/authenticated native runtimes. Native integration tests use deterministic transports, hooks, process fixtures and recorded event shapes.
+No browser-driven click automation or real authenticated Claude/Codex smoke was run for this documentation refresh. Native fixture/process tests are deterministic integration evidence, not live model verification. Use [real-agent checks](../demo/REAL_AGENTS.md) for live smoke commands and evidence collection; the live two-agent demo requires authenticated runtimes.
 
-Corrections are durable messages retrieved through configured native MCP. Agentree cannot guarantee an arbitrary running agent will poll, receive, follow or successfully implement a correction. Passive log observation has no delivery channel. No unsupported unsolicited native push or autonomous recovery was added. Tool denial reasons use the existing supported interception mechanisms.
-
-Main sync snapshots are complete records and use an item-count bound, not a byte/token cap. Large projects may need later pagination; no ranking protocol was rebuilt. Native commands without structured file-change evidence may provide no attributable file changes. File overlap cannot establish semantic incompatibility, and explicit reports still require human judgment. Derived signals no longer leave with the 30-event activity window (overlap evidence uses each branch's full observed write history), and a human disposition is not reopened by new evidence for the same branches and file.
-
-Old context-commit, merge-request and review routes/tools/commands are intentionally replaced. Restart/refresh configured MCP hosts after upgrading so native runtimes discover the new tools. Existing native credentials, event ingestion and approval/lifecycle data remain usable. SQLite version 3 retains old governance rows as archival evidence, never as a second active workflow. See [architecture and migration](ARCHITECTURE.md), [API](GATEWAY_API.md), and the [Console guide](../apps/web/README.md).
+Retrieval does not prove compliance, tool approval does not prove execution, and native completion does not prove correctness. File overlap is potential evidence. Full Main snapshots are bounded by item count rather than bytes/tokens. See [architecture](ARCHITECTURE.md) and [native controls](NATIVE_AGENTS.md#supported-controls) for these product boundaries.

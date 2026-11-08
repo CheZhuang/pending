@@ -1,13 +1,48 @@
-# Native task dispatch REST contract (Vue integration)
+# Native task dispatch API
 
-All human routes accept the paired Console cookie or admin bearer token. The Gateway, not a browser argument, supplies the human actor. Native routes require the target session credential and are not available to the Console. No credential appears in responses.
+Humans submit explicit instructions to an active managed native session. Agentree records delivery evidence; the native runtime owns execution. Authentication and error envelopes follow the [Gateway API](GATEWAY_API.md). Human routes accept admin bearer or paired Console cookie; native runner routes require the target session credential. Credentials are never included in task records.
 
-`POST /v1/tasks` accepts `{ "sessionId": "...", "instructions": "...", "includeMain": true, "requestId": "client-generated UUID" }`. `requestId` is required for retry safety: repeating the same request returns the original task; changing its content for the same ID returns 409. `includeMain` snapshots the current human Main entries at submission, so the task text does not silently change later. The response is a task record with `id`, `requestId`, `workspaceId`, `branchId`, `sessionId`, `runtime`, `instructions`, `mainContext`, `submittedBy`, timestamps, `status`, and optional `nativeTurnId`/`reason`. The instruction and context are immutable. An active managed Codex App Server session is supported. Existing Claude CLI sessions return a durable `delivery-unavailable` task record.
+## Human routes
 
-`GET /v1/tasks?sessionId=...` lists tasks (newest first); `GET /v1/tasks/:id` gets one. `POST /v1/tasks/:id/cancel` requests cancellation. Before delivery it cancels the task; after native acceptance it requests Codex `turn/interrupt`, and terminal status waits for native evidence. A `kill` of the session is separate and may stop more than one task.
+| Method and path | Behavior |
+| --- | --- |
+| POST `/v1/tasks` | Submit `{sessionId,instructions,requestId,includeMain?}`; returns task (201) |
+| GET `/v1/tasks?sessionId=...` | List tasks newest first; session filter is optional |
+| GET `/v1/tasks/:id` | Read one task |
+| POST `/v1/tasks/:id/cancel` | Cancel undelivered work or request interruption |
 
-Statuses: `submitted` means recorded, `delivery-pending` means a bound native runner claimed it, `native-accepted` means `turn/start` returned a native turn ID, `running` requires a matching native `turn/started` event, `completed`/`failed` require matching native `turn/completed` evidence, `delivery-unavailable` means no supported delivery path or a runner reported failure before acceptance, `cancel-requested` means interruption was requested but outcome is not yet observed, `cancelled` means an undelivered request was cancelled, `outcome-unknown` means a delivery attempt was in flight when the Gateway restarted or the session ended without terminal native evidence. Never automatically retry a claimed task: its native outcome could be unknown.
+`requestId` is required and globally unique. Repeating the same request returns the original task; changing its session, instructions, or `includeMain` under the same ID returns HTTP 409. `includeMain` defaults to false. When true, the request stores the current Main revision and active entry IDs/bodies at submission. Instructions and captured Main context remain immutable.
 
-The native runner uses session-bound `GET /v1/native/tasks/next`, `POST /v1/native/tasks/:id/accepted` with `{nativeTurnId}`, and `POST /v1/native/tasks/:id/unavailable` with `{reason}`. These routes are internal integration points. Task transitions emit `task.*` controlled Gateway events in the existing SSE/activity stream; native turn events remain observed records. The Vue developer can implement a task form and task status view against the human routes without modifying this backend contract.
+Records contain `id`, `requestId`, `workspaceId`, `branchId`, `sessionId`, `runtime`, `instructions`, `includeMain`, `mainContext`, `submittedBy`, submission/update timestamps, `status`, and optional `nativeTurnId`/`reason`.
 
-Claude Code: the present managed launcher starts a fresh interactive CLI process and cannot receive unsolicited work. A future explicit new-session CLI launch may use Claude's prompt invocation, but this API does not claim existing-session delivery. Codex: only `ManagedCodex.open` runners poll the queue; an arbitrary Codex Desktop conversation is not a managed target.
+Only a connected, active `ManagedCodex.open` runner can receive tasks. Existing Claude CLI sessions return a durable `delivery-unavailable` record. Arbitrary Codex Desktop conversations are not managed targets. The Console Tasks page uses these HTTP routes.
+
+## Delivery states
+
+| Status | Evidence / meaning |
+| --- | --- |
+| `submitted` | Recorded and awaiting runner claim |
+| `delivery-pending` | Runner claimed the request |
+| `native-accepted` | Native `turn/start` returned a turn ID |
+| `running` | Matching native `turn/started` observed |
+| `completed` / `failed` | Matching native `turn/completed` reports terminal status |
+| `delivery-unavailable` | No supported connected delivery path, or session ended before claim |
+| `cancel-requested` | Interruption requested; no terminal outcome established |
+| `cancelled` | Cancelled before native delivery |
+| `outcome-unknown` | Delivery may have occurred without terminal native evidence |
+
+Before delivery, cancellation marks the task cancelled. After claim/acceptance it requests interruption; the managed Codex runner sends `turn/interrupt` once the turn ID is known. Terminal status still depends on evidence. Killing a session is separate and may affect multiple tasks.
+
+On Gateway restart, in-flight tasks become `outcome-unknown`; claimed work is not automatically redelivered. A delivery RPC failure may also be uncertain because native acceptance can precede the failure. Later matching terminal evidence can resolve an unknown outcome. Native completion does not independently verify correctness.
+
+## Internal runner routes
+
+| Method and path | Behavior |
+| --- | --- |
+| GET `/v1/native/tasks/next` | Heartbeat and claim the oldest queued task, or return null |
+| GET `/v1/native/tasks/next?busy=1` | Heartbeat without claiming work |
+| GET `/v1/native/tasks/:id` | Read the bound session's task |
+| POST `/v1/native/tasks/:id/accepted` | Record `{nativeTurnId}` |
+| POST `/v1/native/tasks/:id/unavailable` | Report `{reason}`; a claimed delivery failure may be `outcome-unknown` |
+
+These are runner integration points, not Console routes. Task transitions emit controlled Gateway `task.*` events through existing history/SSE; native turn notifications remain observed events. See [Codex implementation](../packages/adapters/CODEX_APP_SERVER.md) and [real smoke checks](../demo/REAL_AGENTS.md).

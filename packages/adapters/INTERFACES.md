@@ -1,11 +1,9 @@
 # Native integration boundary
 
-Adapters reuse the shared session/event contracts and trusted Core service. Identity comes from the registered native session and its credential; model payloads never choose an actor. Observed events grant no execution or Main authority.
+Use the shared session/event contracts and trusted Core service. Identity comes from the registered session and its credential, never model-selected actor or branch arguments.
 
-Native observers retain original payloads and map source-native identities into idempotent durable events. Existing cursor stores/journals retry without duplicating ingestion. Claude hooks and Codex App Server notifications provide tool inputs, file changes and runtime results where available. Core reuses rooted file extraction; command strings alone are not parsed into speculative file changes.
+Observers preserve native payloads and identities. Ingestion binds them to the registered workspace/session, deduplicates retries, and checkpoints durable cursors. Codex uses a local journal as a delivery spool; it is not the domain source of truth. Rooted file extraction consumes structured native evidence rather than guessing writes from command strings.
 
-The session-bound MCP server revalidates the runtime credential on every call. It exposes supervision retrieval and lightweight work proposals. Context sync delivers current Main snapshots, branch work and targeted corrections, with retrieval/acknowledgment bookkeeping. It does not rank knowledge types, require scopes or execute recovery.
+The configured [MCP host](../mcp/README.md) authenticates each operation, including cached retries, and supplies session-bound reads and work proposals. [Sync](../sync/README.md) handles retrieval and acknowledgment.
 
-Tool interception remains distinct from observation. The existing pre-execution hooks and native approval requests ask the Gateway for an allow/deny decision; successful approval is not proof of execution. Native completion/failure events remain the source for runtime-reported results.
-
-The Gateway implements authenticated registration, observation, approvals and lifecycle reporting. Main editing and human acceptance/corrections use the [supervision API](../../docs/GATEWAY_API.md). Passive observation offers no correction delivery by itself; configured MCP agents must retrieve updates through their native runtime. See [architecture and limitations](../../docs/ARCHITECTURE.md).
+Observation, pre-execution decisions, and runtime-reported results remain distinct. See [native controls](../../docs/NATIVE_AGENTS.md#supported-controls), [Claude implementation](CLAUDE_MANAGED.md), and [Codex implementation](CODEX_APP_SERVER.md) for supported interception and failure behavior.

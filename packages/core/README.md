@@ -1,7 +1,7 @@
 # Core
 
-`AgentreeService` owns human-governed Main, logical branches, lightweight work proposals, evidence-backed potential conflicts, human acceptance/rejection and corrections. It preserves native sessions, workspace access, event ingestion and policy audit records.
+`AgentreeService` owns workspace access, Main revisions/history, branch work, conflict evidence, human merge decisions, corrections, session observations, and policy audit. `ApplicationService` is its public interface type.
 
-Construct the actor only at a trusted boundary. Agent arguments never provide an actor. An agent can propose on its authenticated session branch and read its workspace; Main writes, acceptance, conflict dispositions and correction messages require a human. Every Main mutation uses the expected global revision and retains entry history.
+Actors come from trusted host authentication. An agent reads its workspace and proposes on its own session branch; human authority is required for Main writes, acceptance, conflict decisions, and corrections.
 
-`decideMerge` accepts or rejects work records. It does not touch Git or project files. See [architecture](../../docs/ARCHITECTURE.md) for exact behavior, ownership and migration.
+See [integration](INTEGRATION.md) for service usage, [architecture](../../docs/ARCHITECTURE.md) for domain behavior, and [Main API](../../docs/MAIN_API.md) for revision semantics. Run checks from the repository root as described in [verification](../../docs/SUPERVISION_VERIFICATION.md).
