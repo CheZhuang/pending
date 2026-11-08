@@ -32,9 +32,12 @@ async function saveDisposition(work, decision, overrideConflicts = false) {
   if (!current.value) return;
   busy.value = true;
   try {
-    await api.mergeWork(current.value.branch.id, { workIds: [work.id], decision, overrideConflicts, expectedMainRevision: data.value.main.revision });
+    await api.mergeWork(work.branchId, { workIds: [work.id], decision, overrideConflicts, expectedMainRevision: data.value.main.revision });
     await reload(); message.success(decision === 'accepted' ? 'Work accepted into Main' : 'Work rejected');
-  } catch (e) { message.error(describe(e).hint); } finally { busy.value = false; }
+  } catch (e) {
+    if (e.code === 'CONFLICT' || e.code === 'STALE') await reload();
+    const detail = describe(e); message.error(detail.hint || detail.title);
+  } finally { busy.value = false; }
 }
 async function sendCorrection() {
   if (!current.value || !correction.value.trim()) return;

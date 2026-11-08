@@ -172,7 +172,7 @@ test('indexed queue and native reconciliation stay scoped with 10,000 unrelated 
     store.transaction(() => {
       for (let i=0;i<10_000;i++) {
         const id=`history-${i}`;
-        insert.run(id,id,JSON.stringify({id,requestId:id,sessionId:i%2?'other':'target',workspaceId:'workspace',instructions:'history'}),'completed','before',`old-${i}`);
+        insert.run(id,id,JSON.stringify({...session,id,requestId:id,sessionId:i%2?'other':'target',workspaceId:'workspace',instructions:'history',includeMain:false,mainContext:null,submittedBy:'human',submittedAt:'before'}),'completed','before',`old-${i}`);
       }
     });
     tasks.heartbeat(session.id);
@@ -196,5 +196,10 @@ test('indexed queue and native reconciliation stay scoped with 10,000 unrelated 
     assert.doesNotMatch(JSON.stringify(plan),/TEMP B-TREE/);
     const nativePlan=store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND native_turn_id=?").all(session.id,'fresh');
     assert.match(JSON.stringify(nativePlan),/gateway_tasks_native_turn/);
+    const eventPlan=store.db.prepare(`EXPLAIN QUERY PLAN SELECT data FROM events WHERE workspace_id=?
+      AND json_extract(data,'$.sessionId')=?
+      AND coalesce(json_extract(data,'$.payload.params.turn.id'),json_extract(data,'$.payload.params.turnId'))=? ORDER BY sequence`).all('workspace',session.id,'fresh');
+    assert.match(JSON.stringify(eventPlan),/gateway_task_native_events/);
+    assert.doesNotMatch(JSON.stringify(eventPlan),/TEMP B-TREE/);
   } finally {store.close();}
 });

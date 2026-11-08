@@ -107,7 +107,7 @@ export class TaskDispatch {
     const p=payload as {params?:{turn?:{id?:string;status?:string;error?:unknown};turnId?:string}};
     const nativeTurnId=p?.params?.turn?.id??p?.params?.turnId;
     if(!nativeTurnId)return;
-    const match=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE native_turn_id=? AND json_extract(request_json,'$.sessionId')=?").get(nativeTurnId,sessionId) as {id:string}|undefined;
+    const match=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE native_turn_id=? AND json_extract(request_json,'$.sessionId')=? ORDER BY rowid DESC LIMIT 1").get(nativeTurnId,sessionId) as {id:string}|undefined;
     const task=match?this.get(match.id):undefined;
     if(!task||(terminal.has(task.status)&&task.status!=='outcome-unknown'))return;
     if(type==='turn/started'&&task.status==='native-accepted')this.transition(task,'running');
