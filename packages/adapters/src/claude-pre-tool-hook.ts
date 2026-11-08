@@ -74,7 +74,11 @@ export function createClaudeDecideClient(
   };
 }
 
-/** Process one Claude PreToolUse hook payload. Allow emits no stdout. */
+/**
+ * Process one Claude PreToolUse hook payload. A Gateway allow is emitted as an explicit
+ * permissionDecision "allow": the human already decided in PendingTree, and without it
+ * headless Claude (`claude -p`) still refuses any tool its own settings do not allow.
+ */
 export async function handleClaudePreToolHook(
   rawInput: string,
   env: ClaudeHookEnvironment,
@@ -106,12 +110,12 @@ export async function handleClaudePreToolHook(
     const decision = result.outcome ?? result.decision;
     if (decision === 'allow') {
       const correction = await pendingCorrectionContext(env.HARNESS_SESSION_ID!, env, diagnostic);
+      // Make the native hook output available before recording a correction receipt,
+      // so a lost HTTP response cannot suppress the correction itself.
+      output(JSON.stringify({ hookSpecificOutput: {
+        hookEventName: 'PreToolUse', permissionDecision: 'allow', ...(correction ? { additionalContext: correction.text } : {}),
+      } }));
       if (correction) {
-        // Make the native hook output available before recording its receipt,
-        // so a lost HTTP response cannot suppress the correction itself.
-        output(JSON.stringify({ hookSpecificOutput: {
-          hookEventName: 'PreToolUse', permissionDecision: 'allow', additionalContext: correction.text,
-        } }));
         try {
           const gatewayUrl = env.HARNESS_GATEWAY_URL ?? 'http://localhost:8787';
           const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(env.HARNESS_SESSION_ID!)}/corrections/delivered`, gatewayUrl), {

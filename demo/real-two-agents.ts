@@ -97,12 +97,13 @@ type Approval = { id: string; state: string; tool: string; input: unknown };
 type Task = { id: string; status: string; nativeTurnId?: string; reason?: string };
 type Overview = { work: Array<{ id: string; sessionId: string; state: string; body: string }>; corrections: unknown[] };
 
-/** Approves only PendingTree MCP calls (collaboration plumbing); everything else waits for the human. */
+/** Approves only PendingTree MCP calls and Claude's ToolSearch (collaboration plumbing); everything else waits for the human. */
 function startApprovalHelper(): () => void {
   const told = new Set<string>();
   const timer = setInterval(() => { void (async () => {
     for (const a of (await api<Approval[]>('/v1/approvals')).filter((x) => x.state === 'pending')) {
-      if (!MANUAL && a.tool.startsWith('mcp__pendingtree__')) {
+      // ToolSearch is how Claude Code loads the deferred PendingTree MCP tools: plumbing too.
+      if (!MANUAL && (a.tool.startsWith('mcp__pendingtree__') || a.tool === 'ToolSearch')) {
         await api(`/v1/approvals/${a.id}`, { decision: 'approved', reason: 'demo helper: PendingTree MCP call' }).catch(() => undefined);
       } else if (!told.has(a.id)) {
         told.add(a.id);
