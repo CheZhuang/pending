@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue';
-import { NAlert, NButton, NCard, NEmpty, NInput, NSelect, NSpace, NTag, useMessage } from 'naive-ui';
+import { NAlert, NButton, NCard, NEmpty, NInput, NSelect, NSpace, NTag, useMessage, useDialog } from 'naive-ui';
 import { api } from '../api/index.js';
 import { describe } from '../api/errors.js';
 import { state } from '../state.js';
@@ -9,6 +9,7 @@ import { dateTime, eventEvidence, short } from '../format.js';
 import BranchGraph from '../components/BranchGraph.vue';
 
 const message = useMessage();
+const dialog = useDialog();
 const { data, error, reload } = useData(() => api.supervision(state.workspaceId), () => [state.workspaceId, state.changed.context, state.changed.sessions, state.changed.supervision]);
 const selected = ref(null); const selectedWork = ref(null); const correction = ref(''); const busy = ref(false);
 const branches = computed(() => data.value?.branches ?? []);
@@ -21,13 +22,22 @@ async function selectFromTree({ branchId, workId }) {
 }
 const correctionStateLabel = (state) => ({ 'not-retrieved': 'Not retrieved', retrieved: 'Retrieved · awaiting acknowledgment', acknowledged: 'Acknowledged' }[state] ?? state);
 const correctionStateType = (state) => state === 'acknowledged' ? 'success' : state === 'retrieved' ? 'warning' : 'default';
-async function disposition(work, decision) {
+function disposition(work, decision) {
+  if (decision === 'accepted' && work.acceptanceWarnings?.unresolvedConflictIds.length) {
+    dialog.warning({ title: 'Accept with unresolved conflicts?', content: 'This work has unresolved conflicts. Accepting adds its conclusion to Main and records your override; existing Main entries remain for review.',
+      positiveText: 'Accept and record override', negativeText: 'Cancel', onPositiveClick: () => saveDisposition(work, decision, true) });
+  } else return saveDisposition(work, decision);
+}
+async function saveDisposition(work, decision, overrideConflicts = false) {
   if (!current.value) return;
   busy.value = true;
   try {
-    await api.mergeWork(current.value.branch.id, { workIds: [work.id], decision, expectedMainRevision: data.value.main.revision });
+    await api.mergeWork(work.branchId, { workIds: [work.id], decision, overrideConflicts, expectedMainRevision: data.value.main.revision });
     await reload(); message.success(decision === 'accepted' ? 'Work accepted into Main' : 'Work rejected');
-  } catch (e) { message.error(describe(e).hint); } finally { busy.value = false; }
+  } catch (e) {
+    if (e.code === 'CONFLICT' || e.code === 'STALE') await reload();
+    const detail = describe(e); message.error(detail.hint || detail.title);
+  } finally { busy.value = false; }
 }
 async function sendCorrection() {
   if (!current.value || !correction.value.trim()) return;
@@ -60,6 +70,8 @@ async function sendCorrection() {
         <p class="work-body">{{ work.body }}</p>
         <NSpace v-if="work.files?.length" size="small"><NTag v-for="f in work.files" :key="f.rootId + f.path" size="small" class="mono">{{ f.rootId }}:{{ f.path }}</NTag></NSpace>
         <p class="muted" style="font-size:11px">{{ dateTime(work.createdAt) }} · session {{ short(work.sessionId) }}</p>
+        <NAlert v-if="work.state === 'proposed' && work.acceptanceWarnings?.unresolvedConflictIds.length" type="warning" style="margin-bottom:8px">This work has {{ work.acceptanceWarnings.unresolvedConflictIds.length }} unresolved conflict(s). Acceptance requires your explicit override.</NAlert>
+        <NAlert v-if="work.state === 'proposed' && work.acceptanceWarnings?.overlappingMainEntryIds.length" type="warning" style="margin-bottom:8px">This conclusion may overlap {{ work.acceptanceWarnings.overlappingMainEntryIds.length }} current Main entry/entries. Review Main for incompatible expectations after acceptance.</NAlert>
         <NSpace v-if="work.state === 'proposed'"><NButton type="primary" size="small" :disabled="busy" @click="disposition(work, 'accepted')">Accept into Main</NButton><NButton type="error" secondary size="small" :disabled="busy" @click="disposition(work, 'rejected')">Reject</NButton></NSpace>
       </NCard>
       <NCard title="Corrections to this branch" size="small" style="margin-top:16px">

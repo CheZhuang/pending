@@ -209,3 +209,24 @@ test('HTTP text-only Main edit keeps file references; an explicit empty list cle
   const cleared = await (await request(`${mainPath}/${created.id}`, adminToken, 'POST', { body: 'Tokens expire after 30 minutes', files: [], expectedRevision: await revision() })).json() as { files: unknown[] };
   assert.equal(cleared.files.length, 0, 'an explicit empty list clears them');
 });
+
+test('HTTP acceptance reports pending conflicts and records an authorized human override', async () => {
+  const s=await registerSession() as Awaited<ReturnType<typeof registerSession>>&{branchId:string};
+  const proposed=await request(`/v1/branches/${s.branchId}/work`,s.sessionToken,'POST',{body:'Contested conclusion',files:[]});
+  const work=await proposed.json() as {id:string};
+  const conflict=await (await request(`/v1/workspaces/${s.workspaceId}/conflicts`,adminToken,'POST',{
+    branchIds:[s.branchId],explanation:'Review this before incorporation',
+  })).json() as {id:string};
+  const main=await (await request(`/v1/workspaces/${s.workspaceId}/main`,adminToken)).json() as {revision:number};
+  const input={workIds:[work.id],decision:'accepted',expectedMainRevision:main.revision};
+  const denied=await request(`/v1/branches/${s.branchId}/merge`,adminToken,'POST',input);
+  assert.equal(denied.status,409);
+  const problem=await denied.json() as {error:{details:{warnings:{unresolvedConflictIds:string[]}}}};
+  assert.ok(problem.error.details.warnings.unresolvedConflictIds.includes(conflict.id));
+  assert.equal((await request(`/v1/branches/${s.branchId}/merge`,s.sessionToken,'POST',{...input,overrideConflicts:true})).status,403);
+  const accepted=await request(`/v1/branches/${s.branchId}/merge`,adminToken,'POST',{...input,overrideConflicts:true});
+  assert.equal(accepted.status,201);
+  const result=await accepted.json() as {overrideConflicts:boolean;mainRevision:number};
+  assert.equal(result.overrideConflicts,true);
+  assert.equal(result.mainRevision,main.revision+1);
+});

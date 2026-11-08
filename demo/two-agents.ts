@@ -82,7 +82,7 @@ export async function runDemo(io: DemoIo, home = mkdtempSync(join(tmpdir(), 'age
     say(`[codex] correction retrieval: ${updateX.items.filter(i => i.kind === 'correction').length} correction(s)`);
 
     step(5, 'Human accepts one work record into Main; the new snapshot reaches both sessions');
-    $('work', 'accept', 'claude-auth', cwork.id); const acceptedC = await claude.tool<ContextDelta>('context_sync', { requestId: 'accepted-c' }); const acceptedX = await codex.tool<ContextDelta>('context_sync', { requestId: 'accepted-x' });
+    $('work', 'accept', 'claude-auth', cwork.id, '--override-conflicts'); const acceptedC = await claude.tool<ContextDelta>('context_sync', { requestId: 'accepted-c' }); const acceptedX = await codex.tool<ContextDelta>('context_sync', { requestId: 'accepted-x' });
     deliveries.claude.push(acceptedC); deliveries.codex.push(acceptedX); $('main'); $('merge');
     const denied = $('--as', codexSession.id, 'main', 'add', 'agent must not edit Main', '--json');
     say(`Agent Main edit exit code: ${denied}`);

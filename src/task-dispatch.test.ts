@@ -90,6 +90,30 @@ test('managed Codex runner consumes a human task through a fake App Server',asyn
   }finally{await native?.close();await gateway.close();await rm(dir,{recursive:true,force:true});}
 });
 
+test('session task queries and oldest delivery stay isolated after unrelated history grows',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'agentree-dispatch-history-'));
+  const database=join(dir,'db.sqlite');
+  const gateway=createGateway({database});const url=await listen(gateway);
+  const call=async(path:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${await readHumanToken(database)}`,...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
+  try{
+    const target=await (await call('/v1/sessions','POST',{runtime:'codex-app-server',cwd:dir,label:'Target'})).json() as {sessionId:string;sessionToken:string};
+    const unrelated=await (await call('/v1/sessions','POST',{runtime:'claude-code',cwd:dir,label:'Unrelated'})).json() as {sessionId:string};
+    for(let i=0;i<120;i++) assert.equal((await call('/v1/tasks','POST',{sessionId:unrelated.sessionId,instructions:`unrelated ${i}`,requestId:`unrelated-${i}`})).status,201);
+    await fetch(url+'/v1/native/tasks/next',{headers:{authorization:`Bearer ${target.sessionToken}`}});
+    const expected:string[]=[];
+    for(let i=0;i<3;i++){
+      const response=await call('/v1/tasks','POST',{sessionId:target.sessionId,instructions:`target ${i}`,requestId:`target-${i}`});
+      expected.push((await response.json() as {id:string}).id);
+    }
+    const targetList=await (await call(`/v1/tasks?sessionId=${target.sessionId}`)).json() as {id:string}[];
+    assert.deepEqual(targetList.map(t=>t.id),[...expected].reverse());
+    const claimed=await (await fetch(url+'/v1/native/tasks/next',{headers:{authorization:`Bearer ${target.sessionToken}`}})).json() as {id:string;status:string};
+    assert.equal(claimed.id,expected[0]);
+    assert.equal(claimed.status,'delivery-pending');
+    assert.deepEqual((await (await call(`/v1/tasks?sessionId=${unrelated.sessionId}`)).json() as unknown[]).length,120);
+  }finally{await gateway.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('startLocal creates the daemon on first run and reuses its local database on repeated startup',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'agentree-start-local-'));
   const previous={home:process.env.AGENTREE_HOME,port:process.env.PORT,noOpen:process.env.AGENTREE_NO_OPEN};
@@ -135,4 +159,47 @@ test('startLocal creates the daemon on first run and reuses its local database o
     if(previous.noOpen===undefined)delete process.env.AGENTREE_NO_OPEN;else process.env.AGENTREE_NO_OPEN=previous.noOpen;
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+test('indexed queue and native reconciliation stay scoped with 10,000 unrelated historical tasks', async () => {
+  const { SqliteStore } = await import('../packages/storage/src/index.js');
+  const { TaskDispatch } = await import('./task-dispatch.js');
+  const store = new SqliteStore(':memory:');
+  try {
+    const tasks = new TaskDispatch(store, () => {});
+    const session = {id:'target',workspaceId:'workspace',branchId:'branch',runtime:'codex-app-server',agentId:'agent',nativeId:'native'};
+    const insert = store.db.prepare('INSERT INTO gateway_tasks(id,request_id,request_json,status,updated_at,native_turn_id) VALUES(?,?,?,?,?,?)');
+    store.transaction(() => {
+      for (let i=0;i<10_000;i++) {
+        const id=`history-${i}`;
+        insert.run(id,id,JSON.stringify({...session,id,requestId:id,sessionId:i%2?'other':'target',workspaceId:'workspace',instructions:'history',includeMain:false,mainContext:null,submittedBy:'human',submittedAt:'before'}),'completed','before',`old-${i}`);
+      }
+    });
+    tasks.heartbeat(session.id);
+    const first=tasks.submit({requestId:'first',instructions:'first',includeMain:false,mainContext:null},session);
+    const second=tasks.submit({requestId:'second',instructions:'second',includeMain:false,mainContext:null},session);
+    // A native terminal event can be persisted before turn/start acknowledgment arrives.
+    store.appendEvent({id:'early',nativeId:'early',workspaceId:'workspace',source:'codex-app-server',sessionId:session.id,
+      type:'turn/completed',mode:'observed',payload:{params:{turn:{id:'fresh',status:'completed'}}},occurredAt:new Date().toISOString()});
+    assert.equal(tasks.claim(session.id)?.id,first.id);
+    assert.equal(tasks.claim(session.id),null);
+    assert.equal(tasks.accepted(first.id,session.id,'fresh').status,'completed');
+    assert.equal(tasks.claim(session.id)?.id,second.id);
+    tasks.observe('other','turn/completed',{params:{turn:{id:'fresh',status:'failed'}}});
+    assert.equal(tasks.get(first.id).status,'completed');
+    assert.equal(tasks.byRequestId('first')?.id,first.id);
+    const recovered=new TaskDispatch(store,()=>{});
+    assert.equal(recovered.get(second.id).status,'outcome-unknown');
+    assert.equal(recovered.claim(session.id),null,'restart never redelivers uncertain work');
+    const plan=store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND status='submitted' ORDER BY rowid LIMIT 1").all(session.id);
+    assert.match(JSON.stringify(plan),/gateway_tasks_session_status/);
+    assert.doesNotMatch(JSON.stringify(plan),/TEMP B-TREE/);
+    const nativePlan=store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND native_turn_id=?").all(session.id,'fresh');
+    assert.match(JSON.stringify(nativePlan),/gateway_tasks_native_turn/);
+    const eventPlan=store.db.prepare(`EXPLAIN QUERY PLAN SELECT data FROM events WHERE workspace_id=?
+      AND json_extract(data,'$.sessionId')=?
+      AND coalesce(json_extract(data,'$.payload.params.turn.id'),json_extract(data,'$.payload.params.turnId'))=? ORDER BY sequence`).all('workspace',session.id,'fresh');
+    assert.match(JSON.stringify(eventPlan),/gateway_task_native_events/);
+    assert.doesNotMatch(JSON.stringify(eventPlan),/TEMP B-TREE/);
+  } finally {store.close();}
 });

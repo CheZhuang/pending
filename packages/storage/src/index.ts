@@ -18,6 +18,13 @@ export class SqliteStore {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     this.migrate();
     this.migrateSupervision();
+    this.db.exec(`CREATE INDEX IF NOT EXISTS events_integration_boundary
+      ON events(workspace_id,json_extract(data,'$.sessionId'),sequence)
+      WHERE (json_extract(data,'$.mode')='observed' AND json_extract(data,'$.type')='turn/completed')
+        OR (source='gateway' AND json_extract(data,'$.type')='session.ended');
+      CREATE INDEX IF NOT EXISTS events_work_proposal
+      ON events(workspace_id,json_extract(data,'$.payload.id'),sequence)
+      WHERE source='gateway' AND json_extract(data,'$.type')='work.proposed';`);
   }
 
   private migrate(): void {
@@ -237,6 +244,32 @@ export class SqliteStore {
     const rows = this.db.prepare(`SELECT data,sequence FROM events WHERE workspace_id=?
       AND json_extract(data,'$.sessionId') IN (${placeholders}) AND json_extract(data,'$.mode')='observed' ORDER BY sequence`)
       .all(workspaceId,...sessionIds) as Array<{data:string;sequence:number}>;
+    return rows.map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
+  }
+
+  sessionSequence(workspaceId: string, sessionId: string): number {
+    return Number(this.db.prepare(`SELECT COALESCE(MAX(sequence),0) AS n FROM events
+      WHERE workspace_id=? AND json_extract(data,'$.sessionId')=?`).get(workspaceId,sessionId)!.n);
+  }
+
+  /** Legacy proposals predate explicit watermarks; their immutable audit sequence is the same boundary. */
+  proposalSequence(workspaceId: string, workId: string): number {
+    const row = this.db.prepare(`SELECT sequence FROM events WHERE workspace_id=? AND source='gateway'
+      AND json_extract(data,'$.type')='work.proposed' AND json_extract(data,'$.payload.id')=?
+      ORDER BY sequence LIMIT 1`).get(workspaceId,workId);
+    return Number(row?.sequence ?? 0);
+  }
+
+  /** Pending raw observations, bounded by explicit native completion and human settlement.
+   * Full native history remains in events for auditing. */
+  pendingSessionEvents(workspaceId: string, sessionId: string, settledThrough: number): SequencedEvent[] {
+    const boundary = this.db.prepare(`SELECT COALESCE(MAX(sequence),0) AS n FROM events
+      WHERE workspace_id=? AND json_extract(data,'$.sessionId')=?
+      AND ((json_extract(data,'$.mode')='observed' AND json_extract(data,'$.type')='turn/completed')
+        OR (source='gateway' AND json_extract(data,'$.type')='session.ended'))`).get(workspaceId,sessionId)!;
+    const rows = this.db.prepare(`SELECT data,sequence FROM events WHERE workspace_id=?
+      AND json_extract(data,'$.sessionId')=? AND sequence>? AND json_extract(data,'$.mode')='observed'
+      ORDER BY sequence`).all(workspaceId,sessionId,Math.max(settledThrough,Number(boundary.n))) as Array<{data:string;sequence:number}>;
     return rows.map(row => ({...JSON.parse(row.data),sequence:row.sequence}) as SequencedEvent);
   }
 

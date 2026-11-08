@@ -18,6 +18,7 @@ const HINTS = {
   UNSUPPORTED_ORIGIN: 'This Console origin is not allowed. Open Agentree from the local Gateway address or configure the supported development origin.',
   INVALID_ORIGIN: 'This Console origin is not allowed. Open Agentree from the local Gateway address or configure the supported development origin.',
   INVALID_ACCESS: 'The Gateway rejected local access. Check that the Gateway is running with the expected local data directory.',
+  CONFLICT: 'Conflict evidence changed or needs review. Refresh the work, review the warnings, and explicitly override only if you want to accept it.',
   STATE: 'The record changed state on the server. The list has been refreshed.',
   STALE: 'Main changed since you opened this. Reload, review the latest reference, then retry.',
   NETWORK: 'The gateway is not reachable. Is `npm start` running on port 8787?',
