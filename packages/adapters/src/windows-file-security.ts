@@ -1,6 +1,21 @@
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
+// Cold Windows PowerShell/.NET startup can exceed five seconds on hosted
+// runners. Keep a finite budget without treating ordinary cold starts as an
+// invalid ACL. Never retry a partially completed capability creation.
+const SECURITY_TIMEOUT_MS = 30_000;
+
+function securityFailure(message: string, error: unknown): Error {
+  const failure = error as { code?: string; status?: number };
+  // execFileSync errors can contain the token on stdin: do not attach the raw
+  // error as cause, or include its command, stdout, stderr or input.
+  const reason = failure.code === 'ETIMEDOUT'
+    ? `Windows PowerShell timed out after ${SECURITY_TIMEOUT_MS} ms`
+    : 'Windows PowerShell or ACL validation failed';
+  return new Error(`${message} (${reason})`);
+}
+
 // Windows mode bits do not represent ACLs. Use the OS security descriptor instead.
 // Keep paths in the environment, never interpolated into PowerShell source, and
 // use LiteralPath so names containing quotes or wildcard characters stay literal.
@@ -30,7 +45,7 @@ function run(path: string, script: string, input = ''): string {
   return execFileSync(join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', identity + script], {
       env: {...process.env, AGENTREE_CAPABILITY_PATH: resolve(path)}, input, encoding: 'utf8',
-      timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: SECURITY_TIMEOUT_MS, maxBuffer: 32 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     });
 }
 
@@ -61,7 +76,7 @@ try {
   } catch (error) {
     // Another creator may have won. The caller still validates the existing file.
     if ((error as {status?:number}).status !== 3)
-      throw new Error('Could not create an owner-only Windows human capability');
+      throw securityFailure('Could not create an owner-only Windows human capability', error);
   }
 }
 
@@ -79,5 +94,5 @@ try {
   [Console]::Out.Write($reader.ReadToEnd())
 } finally { $stream.Dispose() }
 `);
-  } catch { throw new Error('Gateway human capability must be an owner-only regular file (Windows ACL validation failed)'); }
+  } catch (error) { throw securityFailure('Gateway human capability must be an owner-only regular file (Windows ACL validation failed)', error); }
 }
