@@ -191,3 +191,20 @@ test('Main history, conflicts, and corrections use authenticated human routes', 
   })).status,403);
   assert.equal((await request(`/v1/branches/${s.branchId}/corrections`,s.sessionToken,'POST',{body:'agent attempt'})).status,403);
 });
+
+test('HTTP text-only Main edit keeps file references; an explicit empty list clears them', async () => {
+  const s = await registerSession();
+  const workspace = await (await request(`/v1/workspaces/${s.workspaceId}`, adminToken)).json() as { roots: Array<{ id: string }> };
+  const rootId = workspace.roots[0]!.id;
+  const mainPath = `/v1/workspaces/${s.workspaceId}/main`;
+  const revision = async () => ((await (await request(mainPath, adminToken)).json()) as { revision: number }).revision;
+  const created = await (await request(mainPath, adminToken, 'POST', { body: 'Tokens expire after 15 minutes', files: [{ rootId, path: 'src/auth/token.ts' }], expectedRevision: await revision() })).json() as { id: string; files: unknown[] };
+  assert.equal(created.files.length, 1);
+  const textOnly = await request(`${mainPath}/${created.id}`, adminToken, 'POST', { body: 'Tokens expire after 30 minutes', expectedRevision: await revision() });
+  assert.equal(textOnly.status, 200);
+  const kept = await textOnly.json() as { body: string; files: unknown[] };
+  assert.equal(kept.body, 'Tokens expire after 30 minutes');
+  assert.equal(kept.files.length, 1, 'omitting files keeps the existing references');
+  const cleared = await (await request(`${mainPath}/${created.id}`, adminToken, 'POST', { body: 'Tokens expire after 30 minutes', files: [], expectedRevision: await revision() })).json() as { files: unknown[] };
+  assert.equal(cleared.files.length, 0, 'an explicit empty list clears them');
+});

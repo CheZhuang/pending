@@ -336,8 +336,13 @@ export function createGateway(options: GatewayOptions) {
                 if (method === 'GET') return send(history && entryId ? svc.mainHistory(wid!,entryId) : svc.main(wid!));
                 if (method === 'POST' && !history) {
                     human();
-                    const b = mainInputSchema.extend({expectedRevision:z.number().int().min(0),remove:z.boolean().optional()}).parse(await body(req));
-                    return send(admin.editMain(wid!,b,b.expectedRevision,entryId,b.remove),entryId ? 200 : 201);
+                    const raw = await body(req);
+                    const b = mainInputSchema.extend({expectedRevision:z.number().int().min(0),remove:z.boolean().optional()}).parse(raw);
+                    // The schema defaults files to []; only forward files the client actually sent,
+                    // so a text-only edit keeps the entry's file references (core keeps them when omitted).
+                    const sentFiles = typeof raw === 'object' && raw !== null && 'files' in raw;
+                    const input = sentFiles ? {body:b.body,files:b.files} : {body:b.body};
+                    return send(admin.editMain(wid!,input,b.expectedRevision,entryId,b.remove),entryId ? 200 : 201);
                 }
             }
             const supervisionRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/(supervision|conflicts|merges)(?:\/([^/]+))?$/);
