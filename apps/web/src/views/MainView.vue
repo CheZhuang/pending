@@ -7,7 +7,7 @@ import { RouterLink } from 'vue-router';
 import { NAlert, NButton, NCard, NDrawer, NDrawerContent, NEmpty, NInput, NSpace, NTag, NTimeline, NTimelineItem, useDialog, useMessage } from 'naive-ui';
 import WordDiff from '../components/WordDiff.vue';
 import { api } from '../api/index.js';
-import { describe } from '../api/errors.js';
+import { describe, errorText } from '../api/errors.js';
 import { state, workspace } from '../state.js';
 import { useData } from '../useData.js';
 import { actorText, dateTime, short } from '../format.js';
@@ -71,7 +71,7 @@ async function restoreRemoved(entry) {
     const revision = lastActiveRevision(history);
     if (revision === null) { message.error('This entry has no active version to restore.'); return; }
     await act(() => api.restoreMainEntry(state.workspaceId, entry.id, { revision, expectedRevision: data.value.revision }), `Entry restored from revision ${revision}`);
-  } catch (e) { message.error(describe(e).title); } finally { busy.value = false; }
+  } catch (e) { message.error(errorText(e), { duration: 7000 }); } finally { busy.value = false; }
 }
 
 // ---- per-entry history drawer

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -10,10 +10,12 @@ const adminToken = 'test-admin-token-for-main-history-routes-long-enough';
 let directory: string;
 let gateway: ReturnType<typeof createGateway>;
 let baseUrl: string;
+let database: string;
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-main-history-'));
-  gateway = createGateway({ database: join(directory, 'gateway.sqlite') });
+  database = join(directory, 'gateway.sqlite');
+  gateway = createGateway({ database });
   await new Promise<void>(resolve => gateway.server.listen(0, '127.0.0.1', resolve));
   const address = gateway.server.address();
   assert.ok(address && typeof address !== 'string');
@@ -28,7 +30,7 @@ after(async () => {
 async function request(path: string, token: string, method = 'GET', data?: unknown) {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${token === adminToken ? (await readFile(`${database}.human-token`, 'utf8')).trim() : token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }

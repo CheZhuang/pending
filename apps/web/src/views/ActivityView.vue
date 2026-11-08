@@ -1,12 +1,14 @@
-<!-- Activity: the live event log (history + SSE) with filters, and full details per event. -->
+<!-- Activity: the live event log (a recent window of history + SSE) with filters, older
+     history on demand, and full details per event. -->
 <script setup>
 import { computed, h, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { NCard, NDataTable, NDescriptions, NDescriptionsItem, NDrawer, NDrawerContent, NInput, NSelect, NSpace, NSwitch, NTag } from 'naive-ui';
+import { NAlert, NButton, NCard, NDataTable, NDescriptions, NDescriptionsItem, NDrawer, NDrawerContent, NEmpty, NInput, NSelect, NSpace, NSwitch, NTag } from 'naive-ui';
+import { describe } from '../api/errors.js';
 import { api } from '../api/index.js';
 import { eventEvidence, eventSummary, eventTone, short, time, dateTime } from '../format.js';
 import { sessionLabel } from '../model.js';
-import { state } from '../state.js';
+import { loadOlder, selectWorkspace, state } from '../state.js';
 import { useData } from '../useData.js';
 
 const { data: sessions } = useData(async () => (await api.sessions()).filter((s) => s.workspaceId === state.workspaceId),
@@ -79,6 +81,10 @@ const rowProps = (e) => ({ style: 'cursor: pointer', onClick: () => { selected.v
   <div class="page">
     <h1 class="page-title">Activity</h1>
     <p class="page-sub">Observed agent activity and every gateway decision, newest first. Observed events are telemetry, not proof of execution.</p>
+    <NAlert v-if="state.history.error" type="error" :title="describe(state.history.error).title" style="margin-bottom: 12px">
+      {{ describe(state.history.error).hint || 'Activity history could not be loaded.' }}
+      <template #action><NButton size="small" @click="state.events.length ? loadOlder() : selectWorkspace(state.workspaceId)">Retry</NButton></template>
+    </NAlert>
 
     <NCard size="small">
       <NSpace class="filters" :size="10" align="center" :wrap="true">
@@ -87,12 +93,22 @@ const rowProps = (e) => ({ style: 'cursor: pointer', onClick: () => { selected.v
         <NInput v-model:value="search" size="small" clearable placeholder="Search type, file, command…" style="width: 240px" />
         <span class="toggle"><NSwitch v-model:value="denialsOnly" size="small" /> Denials &amp; stops only</span>
         <span class="toggle"><NSwitch v-model:value="paused" size="small" /> Pause</span>
-        <span class="muted" style="font-size: 12px">{{ rows.length }} of {{ state.events.length }} events</span>
+        <span class="muted" style="font-size: 12px">{{ rows.length }} of {{ state.events.length }} loaded events</span>
       </NSpace>
       <NDataTable
         :columns="columns" :data="rows" :row-key="(e) => e.sequence" :row-props="rowProps"
-        size="small" :bordered="false" virtual-scroll :max-height="'calc(100vh - 300px)'" :scroll-x="900" style="margin-top: 12px"
-      />
+        size="small" :bordered="false" virtual-scroll :max-height="'calc(100vh - 340px)'" :scroll-x="900" style="margin-top: 12px"
+        :loading="state.history.loading"
+      >
+        <template #empty><NEmpty size="small" :description="state.history.loading ? 'Loading recent activity…' : state.events.length ? 'No loaded event matches these filters.' : 'No activity recorded yet.'" /></template>
+      </NDataTable>
+      <div class="older">
+        <template v-if="state.history.hasOlder">
+          <span class="muted">Showing recent activity only<template v-if="paused"> (paused)</template>.</span>
+          <NButton size="small" secondary :loading="state.history.loadingOlder" :disabled="paused" @click="loadOlder">Load older events</NButton>
+        </template>
+        <span v-else-if="!state.history.loading && state.events.length" class="muted">Beginning of this workspace's history.</span>
+      </div>
     </NCard>
 
     <NDrawer :show="!!selected" :width="'min(560px, 100vw)'" @update:show="(v) => { if (!v) selected = null; }">
@@ -115,4 +131,5 @@ const rowProps = (e) => ({ style: 'cursor: pointer', onClick: () => { selected.v
 
 <style scoped>
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.older { display: flex; align-items: center; gap: 10px; justify-content: center; margin-top: 10px; font-size: 12px; }
 </style>

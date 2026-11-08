@@ -218,7 +218,7 @@ function writer(f: ReturnType<typeof fixture>) {
 const overlapOn = (f: ReturnType<typeof fixture>, path: string) =>
   f.human.conflicts(f.workspace.id).filter(c => c.branchIds.length === 2 && c.files.some(x => x.path === path));
 
-test('a human decision on a file overlap sticks when the same file is edited again', () => {
+test('new evidence reopens a dismissed file overlap as a new assessment', () => {
   const f = fixture();
   try {
     const w = writer(f);
@@ -228,12 +228,105 @@ test('a human decision on a file overlap sticks when the same file is edited aga
     f.human.decideConflict(f.workspace.id, first.id, 'dismissed', 'Different functions in the same file');
     w.alice('src/shared.ts');
     const now = overlapOn(f, 'src/shared.ts');
-    assert.equal(now.length, 1, 'no second signal for the same branches and file');
-    assert.equal(now[0]!.id, first.id);
-    assert.equal(now[0]!.status, 'dismissed');
+    assert.equal(now.length, 1, 'the current view contains only the new assessment');
+    assert.equal(now[0]!.status, 'potential');
+    assert.notEqual(now[0]!.id, first.id);
+    assert.ok(f.human.events(f.workspace.id).events.some(e => e.type === 'conflict.decided'), 'the previous decision remains in the audit log');
     // A different file is a different signal and still starts as potential.
     w.bob('src/other.ts'); w.alice('src/other.ts');
     assert.equal(overlapOn(f, 'src/other.ts')[0]!.status, 'potential');
+  } finally { f.store.close(); }
+});
+
+test('a new proposal and a Main revision each create a fresh conflict assessment', () => {
+  const f=fixture();
+  try {
+    f.a.proposeWork(f.alice.id,work('A',[file('src/shared.ts')]));
+    const firstWork=f.b.proposeWork(f.bob.id,work('B',[file('src/shared.ts')]));
+    const first=f.human.conflicts(f.workspace.id).find(c=>c.branchIds.length===2)!;
+    f.human.decideConflict(f.workspace.id,first.id,'dismissed','Reviewed');
+    f.b.proposeWork(f.bob.id,work('B again',[file('src/shared.ts')]));
+    const next=f.human.conflicts(f.workspace.id).find(c=>c.branchIds.length===2)!;
+    assert.notEqual(next.id,first.id);
+    assert.equal(next.status,'potential');
+    const entry=f.human.editMain(f.workspace.id,{body:'Main version one',files:[file('src/config.ts')]},0);
+    f.a.proposeWork(f.alice.id,work('Change config',[file('src/config.ts')]));
+    let mainSignal=f.human.conflicts(f.workspace.id).find(c=>c.mainEntryId===entry.id)!;
+    f.human.decideConflict(f.workspace.id,mainSignal.id,'dismissed','Reviewed current revision');
+    f.human.editMain(f.workspace.id,{body:'Main version two'},1,entry.id);
+    mainSignal=f.human.conflicts(f.workspace.id).find(c=>c.mainEntryId===entry.id)!;
+    assert.equal(mainSignal.status,'potential');
+    assert.ok(firstWork.id);
+  } finally { f.store.close(); }
+});
+
+test('completed and accepted session work do not create misleading raw activity overlaps', () => {
+  const f = fixture();
+  try {
+    const sessions = f.store.list<{id:string;branchId:string}>('session');
+    const sa = sessions.find(s => s.branchId === f.alice.id)!;
+    const sb = sessions.find(s => s.branchId === f.bob.id)!;
+    const event = (id:string, sessionId:string, nativeId:string, type:string, payload:unknown) => ({
+      id, workspaceId:f.workspace.id, source:'native', nativeId, sessionId, type, mode:'observed' as const,
+      payload, occurredAt:new Date().toISOString(),
+    });
+    f.a.ingest(event('turn-a',sa.id,'turn-a','item/completed',{touches:[{rootId:'repo',path:'src/result.ts',access:'write'}]}));
+    f.b.ingest(event('turn-b',sb.id,'turn-b','item/completed',{touches:[{rootId:'repo',path:'src/result.ts',access:'write'}]}));
+    const a=f.a.proposeWork(f.alice.id,work('A result',[file('src/result.ts')]));
+    const b=f.b.proposeWork(f.bob.id,work('B result',[file('src/result.ts')]));
+    f.human.decideMerge(f.alice.id,[a.id],'accepted',0,true);
+    f.human.decideMerge(f.bob.id,[b.id],'accepted',1,true);
+    assert.equal(overlapOn(f,'src/result.ts').length,0);
+    f.a.ingest(event('late-a',sa.id,'late-a','file.changed',{touches:[{rootId:'repo',path:'src/result.ts',access:'write'}]}));
+    f.b.ingest(event('late-b',sb.id,'late-b','file.changed',{touches:[{rootId:'repo',path:'src/result.ts',access:'write'}]}));
+    assert.equal(overlapOn(f,'src/result.ts').length,1, 'later writes beyond the settled proposal watermark remain visible');
+  } finally { f.store.close(); }
+});
+
+test('unresolved acceptance conflicts require an explicit human override and return warnings', () => {
+  const f=fixture();
+  try {
+    const proposal=f.a.proposeWork(f.alice.id,work('Change shared file',[file('src/shared.ts')]));
+    f.b.proposeWork(f.bob.id,work('Also change shared file',[file('src/shared.ts')]));
+    const conflict=f.human.conflicts(f.workspace.id).find(c=>c.branchIds.length===2)!;
+    assert.equal(f.human.branchOverview(f.alice.id).work.find(w=>w.id===proposal.id)?.acceptanceWarnings?.unresolvedConflictIds.includes(conflict.id),true);
+    assert.throws(()=>f.human.decideMerge(f.alice.id,[proposal.id],'accepted',0),code('CONFLICT'));
+    assert.equal(f.human.main(f.workspace.id).revision,0);
+    const result=f.human.decideMerge(f.alice.id,[proposal.id],'accepted',0,true);
+    assert.equal(result.state,'accepted');
+    assert.ok(result.warnings?.unresolvedConflictIds.includes(conflict.id));
+    assert.deepEqual(result.warnings?.overlappingMainEntryIds,[]);
+  } finally { f.store.close(); }
+});
+
+test('acceptance rollback leaves every work and Main unchanged when a batch has an unresolved conflict',()=>{
+  const f=fixture();
+  try {
+    const safe=f.a.proposeWork(f.alice.id,work('Safe work'));
+    const contested=f.a.proposeWork(f.alice.id,work('Contested work',[file('src/shared.ts')]));
+    f.b.proposeWork(f.bob.id,work('Sibling work',[file('src/shared.ts')]));
+    assert.throws(()=>f.human.decideMerge(f.alice.id,[safe.id,contested.id],'accepted',0),code('CONFLICT'));
+    assert.equal(f.human.main(f.workspace.id).revision,0);
+    assert.equal(f.store.get<{state:string}>(safe.id,'branch-work')?.state,'proposed');
+    assert.equal(f.store.get<{state:string}>(contested.id,'branch-work')?.state,'proposed');
+  } finally { f.store.close(); }
+});
+
+test('a storage failure during acceptance rolls back Main and every work state',()=>{
+  const f=fixture();
+  try {
+    const one=f.a.proposeWork(f.alice.id,work('One'));
+    const two=f.a.proposeWork(f.alice.id,work('Two'));
+    const originalInsert=f.store.insert.bind(f.store);
+    f.store.insert=((id:string,kind:string,value:unknown) => {
+      if(kind==='acceptance') throw new Error('simulated storage failure');
+      return originalInsert(id,kind,value);
+    }) as typeof f.store.insert;
+    assert.throws(()=>f.human.decideMerge(f.alice.id,[one.id,two.id],'accepted',0),/simulated storage failure/);
+    f.store.insert=originalInsert as typeof f.store.insert;
+    assert.equal(f.human.main(f.workspace.id).revision,0);
+    assert.equal(f.store.get<{state:string}>(one.id,'branch-work')?.state,'proposed');
+    assert.equal(f.store.get<{state:string}>(two.id,'branch-work')?.state,'proposed');
   } finally { f.store.close(); }
 });
 
@@ -263,5 +356,26 @@ test('agents see only corrections addressed to their own branch', () => {
     assert.deepEqual(view.corrections.map(c => c.body), ['Alice: keep protocol v1']);
     assert.deepEqual(view.branches.flatMap(b => b.corrections).map(c => c.body), ['Alice: keep protocol v1']);
     assert.equal(f.human.branchOverview(f.bob.id).corrections.length, 1, 'humans still see every correction');
+  } finally { f.store.close(); }
+});
+
+
+test('native turn completion retires raw overlap while proposed conclusions remain pending', () => {
+  const f=fixture();
+  try {
+    const writes=writer(f);
+    const before=writes.alice('src/done.ts');
+    writes.bob('src/done.ts');
+    assert.equal(overlapOn(f,'src/done.ts').length,1);
+    const session=f.store.list<{id:string;branchId:string}>('session').find(s=>s.branchId===f.alice.id)!;
+    f.a.ingest({id:'completion',nativeId:'completion',workspaceId:f.workspace.id,source:'native',sessionId:session.id,
+      type:'turn/completed',mode:'observed',payload:{params:{turn:{id:'turn',status:'completed'}}},occurredAt:'2000-01-01T00:00:00Z'});
+    assert.equal(overlapOn(f,'src/done.ts').length,0,'arrival sequence, not native timestamp, closes the window');
+    assert.ok(f.store.event(before),'retired evidence remains available for auditing');
+    const proposed=f.a.proposeWork(f.alice.id,work('Completed but awaiting integration',[file('src/done.ts')]));
+    assert.equal(overlapOn(f,'src/done.ts').length,1,'an explicit pending proposal remains relevant');
+    f.human.decideMerge(f.alice.id,[proposed.id],'rejected',0);
+    assert.equal(overlapOn(f,'src/done.ts').length,0);
+    assert.equal(f.human.main(f.workspace.id).revision,0);
   } finally { f.store.close(); }
 });

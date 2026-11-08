@@ -26,7 +26,14 @@ test('mock Gateway supports Main history, stale writes, work acceptance and conf
 
   const supervision = await api.supervision(workspaceId);
   const branch = supervision.branches.find(item => item.branch.id === 'claude-auth');
-  await api.mergeWork(branch.branch.id, { workIds: ['work-claude'], decision: 'accepted', expectedMainRevision: supervision.main.revision });
+  const proposal = branch.work.find(item => item.id === 'work-claude');
+  assert.deepEqual(proposal.acceptanceWarnings.unresolvedConflictIds, ['conflict-auth']);
+  // Like the Gateway: an unresolved conflict blocks acceptance until the human overrides it.
+  await assert.rejects(() => api.mergeWork(branch.branch.id, { workIds: ['work-claude'], decision: 'accepted', expectedMainRevision: supervision.main.revision }),
+    e => e.status === 409 && e.code === 'CONFLICT' && e.details.warnings.unresolvedConflictIds[0] === 'conflict-auth');
+  assert.equal((await api.main(workspaceId)).revision, supervision.main.revision, 'a refused accept writes nothing');
+  const merge = await api.mergeWork(branch.branch.id, { workIds: ['work-claude'], decision: 'accepted', overrideConflicts: true, expectedMainRevision: supervision.main.revision });
+  assert.equal(merge.overrideConflicts, true);
   assert.ok((await api.main(workspaceId)).entries.some(entry => entry.sourceWorkId === 'work-claude'));
 
   const [conflict] = await api.conflicts(workspaceId);
@@ -65,4 +72,18 @@ test('a remotely removed entry makes an in-flight edit fail instead of creating 
   const final = await api.main(workspaceId);
   assert.equal(final.entries.some(item => item.body === 'in-flight old text'), false);
   assert.ok(final.removedEntries.some(item => item.id === entry.id));
+});
+
+test('rejecting needs no override, and work without conflicts is accepted directly', async () => {
+  const api = createMock();
+  const [{ id: workspaceId }] = await api.workspaces();
+  let supervision = await api.supervision(workspaceId);
+  const codex = supervision.branches.find(item => item.branch.id === 'codex-api');
+  assert.deepEqual(codex.work[0].acceptanceWarnings.unresolvedConflictIds, []);
+  const merge = await api.mergeWork('codex-api', { workIds: ['work-codex'], decision: 'accepted', expectedMainRevision: supervision.main.revision });
+  assert.equal(merge.overrideConflicts, false);
+  supervision = await api.supervision(workspaceId);
+  const rejected = await api.mergeWork('claude-auth', { workIds: ['work-claude'], decision: 'rejected', expectedMainRevision: supervision.main.revision });
+  assert.equal(rejected.state, 'rejected');
+  assert.equal(supervision.branches.find(item => item.branch.id === 'codex-api').work[0].acceptanceWarnings, undefined, 'settled work carries no warnings');
 });

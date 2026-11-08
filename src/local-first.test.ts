@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -24,39 +24,49 @@ after(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-test('local human access works without an admin token; explicit bearer credentials remain agent credentials', async () => {
-  const listing = await request('/v1/workspaces');
+test('local human access requires the persistent human token; explicit bearer credentials take priority', async () => {
+  assert.equal((await request('/v1/workspaces')).status, 401);
+  const listing = await request('/v1/workspaces', { token: await humanToken() });
   assert.equal(listing.status, 200);
   assert.deepEqual(await listing.json(), []);
 
-  const created = await request('/v1/workspaces', { method: 'POST', body: { name: 'local workspace', roots: [] } });
+  const created = await request('/v1/workspaces', { method: 'POST', token: await humanToken(), body: { name: 'local workspace', roots: [] } });
   assert.equal(created.status, 201);
   const workspace = await created.json() as { id: string };
   assert.ok(workspace.id);
 
-  const sessionResponse = await request('/v1/sessions', { method: 'POST', body: { runtime: 'claude-code', cwd: '/tmp/local-first', label: 'test agent' } });
+  const sessionResponse = await request('/v1/sessions', { method: 'POST', token: await humanToken(), body: { runtime: 'claude-code', cwd: '/tmp/local-first', label: 'test agent' } });
   assert.equal(sessionResponse.status, 201);
   const session = await sessionResponse.json() as { sessionId: string; sessionToken: string; branchId: string };
   assert.ok(session.sessionToken);
-  assert.equal((await request('/v1/events', { method: 'POST', body: {} })).status, 403, 'human access cannot forge native activity');
+  assert.equal((await request('/v1/events', { token: await humanToken(), method: 'POST', body: {} })).status, 403, 'human access cannot forge native activity');
 
   // Any explicit bearer token selects the agent credential path. The legacy
   // startup option has no administrator authority, even if supplied.
   assert.equal((await request('/v1/workspaces', { token: legacyToken })).status, 401);
   assert.equal((await request('/v1/workspaces', { token: 'invalid-bearer' })).status, 401);
-  assert.equal((await request('/v1/events', { method: 'POST', body: {} })).status, 403, 'human access cannot submit agent activity');
+  assert.equal((await request('/v1/workspaces', { token: session.sessionToken })).status, 403, 'agent credentials cannot act as a human');
   assert.equal((await request('/v1/sessions', { token: session.sessionToken })).status, 403);
   assert.equal((await request(`/v1/branches/${session.branchId}/work`, { token: session.sessionToken })).status, 200);
 });
 
 test('browser origins must be local or explicitly configured, and cross-site metadata is rejected', async () => {
-  const sameListener = await request('/v1/workspaces', { headers: { origin: baseUrl } });
+  const sameListener = await request('/v1/workspaces', { token: await humanToken(), headers: { origin: baseUrl } });
   assert.equal(sameListener.status, 200);
 
-  const configuredConsole = await request('/v1/workspaces', { headers: { origin: consoleOrigin } });
+  const configuredConsole = await request('/v1/workspaces', { token: await humanToken(), headers: { origin: consoleOrigin } });
   assert.equal(configuredConsole.status, 200);
-  const browserWrite = await request('/v1/workspaces', { method: 'POST', headers: { origin: consoleOrigin }, body: { name: 'browser workspace', roots: [] } });
+  const ticketResponse = await request('/v1/console-ticket', { token: await humanToken(), method: 'POST', headers: { origin: consoleOrigin } });
+  assert.equal(ticketResponse.status, 200);
+  const { ticket } = await ticketResponse.json() as { ticket: string };
+  const exchange = await request('/v1/console-session', { method: 'POST', headers: { origin: consoleOrigin }, body: { ticket } });
+  assert.equal(exchange.status, 200);
+  assert.match(exchange.headers.get('set-cookie') ?? '', /agentree_console=.*HttpOnly.*SameSite=Strict.*Path=\//i);
+  const cookie = (exchange.headers.get('set-cookie') ?? '').split(';', 1)[0]!;
+  const browserWrite = await request('/v1/workspaces', { method: 'POST', headers: { origin: consoleOrigin, cookie }, body: { name: 'browser workspace', roots: [] } });
   assert.equal(browserWrite.status, 201, 'a configured loopback console origin may write');
+  assert.equal((await request('/v1/console-session', { method: 'POST', headers: { origin: consoleOrigin }, body: { ticket } })).status, 401, 'ticket is one-use');
+  assert.equal((await request('/v1/workspaces', { token: 'invalid-bearer', headers: { cookie } })).status, 401, 'invalid explicit bearer takes priority over a valid cookie');
 
   const badHeaders: Array<Record<string, string>> = [
     { origin: 'https://attacker.example' },
@@ -65,14 +75,14 @@ test('browser origins must be local or explicitly configured, and cross-site met
     { 'sec-fetch-site': 'same-origin' },
   ];
   for (const headers of badHeaders) {
-    const response = await request('/v1/workspaces', { method: 'POST', headers, body: { name: 'blocked', roots: [] } });
+    const response = await request('/v1/workspaces', { token: await humanToken(), method: 'POST', headers, body: { name: 'blocked', roots: [] } });
     assert.equal(response.status, 403, `expected rejection for ${JSON.stringify(headers)}`);
   }
   assert.equal(await hostStatus('attacker.example'), 403, 'a hostile Host header is rejected');
 });
 
 test('native session credentials survive gateway restart', async () => {
-  const created = await request('/v1/sessions', { method: 'POST', body: { runtime: 'codex-app-server', cwd: '/tmp/restart-agent', label: 'persistent agent' } });
+  const created = await request('/v1/sessions', { token: await humanToken(), method: 'POST', body: { runtime: 'codex-app-server', cwd: '/tmp/restart-agent', label: 'persistent agent' } });
   assert.equal(created.status, 201);
   const session = await created.json() as { sessionId: string; sessionToken: string; branchId: string };
   const beforeRestart = await request(`/v1/branches/${session.branchId}/work`, { token: session.sessionToken });
@@ -88,7 +98,8 @@ test('native session credentials survive gateway restart', async () => {
     body: { body: 'Agent credential remains scoped after restart', files: [] },
   });
   assert.equal(work.status, 201);
-  assert.equal((await request('/v1/workspaces')).status, 200, 'local human access remains available after restart');
+  assert.equal((await request('/v1/workspaces')).status, 401, 'anonymous access remains denied after restart');
+  assert.equal((await request('/v1/workspaces', { token: await humanToken() })).status, 200, 'persistent human token remains available after restart');
 });
 
 test('the local server serves the Console shell, deep links, and built assets safely', async () => {
@@ -119,7 +130,6 @@ test('the local server serves the Console shell, deep links, and built assets sa
 });
 
 async function startGateway() {
-  // Legacy adminToken is intentionally supplied to prove it is ignored.
   const legacyOptions = { database, adminToken: legacyToken, consoleOrigins: ['http://localhost:4173'] };
   gateway = createGateway(legacyOptions);
   await new Promise<void>(resolveListen => gateway.server.listen(0, '127.0.0.1', resolveListen));
@@ -128,6 +138,8 @@ async function startGateway() {
   baseUrl = `http://127.0.0.1:${address.port}`;
   consoleOrigin = 'http://localhost:4173';
 }
+
+async function humanToken(): Promise<string> { return (await readFile(`${database}.human-token`, 'utf8')).trim(); }
 
 async function request(path: string, options: {
   method?: string;

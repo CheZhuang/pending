@@ -1,5 +1,8 @@
 @baseUrl = http://127.0.0.1:8787
 # After registration, paste sessionToken from its response here.
+# Trusted local HTTP tools can resolve this owner-only file automatically.
+# The normal CLI/Console flow requires no manual token handling.
+@humanToken = REPLACE_WITH_LOCAL_HUMAN_CAPABILITY
 @sessionToken = REPLACE_WITH_SESSION_TOKEN
 @workspaceId = REPLACE_WITH_WORKSPACE_ID
 @sessionId = REPLACE_WITH_SESSION_ID
@@ -11,6 +14,7 @@ GET {{baseUrl}}/health
 
 ### Create workspace (admin)
 POST {{baseUrl}}/v1/workspaces
+Authorization: Bearer {{humanToken}}
 Content-Type: application/json
 
 {"name":"Gateway fixture workspace","roots":[]}
@@ -18,15 +22,18 @@ Content-Type: application/json
 ### Register a Claude session under a new workspace/branch (admin)
 # Registration with cwd will create a workspace and branch when no exact root exists.
 POST {{baseUrl}}/v1/sessions
+Authorization: Bearer {{humanToken}}
 Content-Type: application/json
 
 {"runtime":"claude-code","cwd":"/tmp/gateway-fixture","label":"fixture-agent"}
 
 ### Read workspaces (admin; copy the desired id above)
 GET {{baseUrl}}/v1/workspaces
+Authorization: Bearer {{humanToken}}
 
 ### List sessions (admin; copy sessionId above)
 GET {{baseUrl}}/v1/sessions
+Authorization: Bearer {{humanToken}}
 
 ### Ask for a tool decision (session; this waits for an admin decision)
 POST {{baseUrl}}/v1/decide
@@ -37,9 +44,11 @@ Content-Type: application/json
 
 ### Inspect pending approvals in another request/tab (admin)
 GET {{baseUrl}}/v1/approvals
+Authorization: Bearer {{humanToken}}
 
 ### Approve a pending decision (admin; use its id as approvalId)
 POST {{baseUrl}}/v1/approvals/{{approvalId}}
+Authorization: Bearer {{humanToken}}
 Content-Type: application/json
 
 {"decision":"approved","reason":"fixture approval"}
@@ -52,9 +61,11 @@ Content-Type: application/json
 
 ### Read workspace event history (admin)
 GET {{baseUrl}}/v1/workspaces/{{workspaceId}}/events?after=0&limit=100
+Authorization: Bearer {{humanToken}}
 
 ### Resume global event stream (admin; Last-Event-ID takes precedence over after)
 GET {{baseUrl}}/v1/stream?after={{cursor}}&workspaceId={{workspaceId}}
+Authorization: Bearer {{humanToken}}
 Accept: text/event-stream
 
 ### End session (session-scoped credential)
@@ -71,9 +82,11 @@ Authorization: Bearer {{sessionToken}}
 
 ### Write a human expectation directly (use the actual current revision)
 POST {{baseUrl}}/v1/workspaces/{{workspaceId}}/main
+Authorization: Bearer {{humanToken}}
 Content-Type: application/json
 
 {"body":"Keep the public API backward compatible.","expectedRevision":0}
 
 ### Inspect branches, activity, proposed work and potential conflicts
 GET {{baseUrl}}/v1/workspaces/{{workspaceId}}/supervision
+Authorization: Bearer {{humanToken}}

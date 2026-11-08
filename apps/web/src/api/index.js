@@ -27,15 +27,3 @@ export function switchMode(next) {
   url.searchParams.delete('api');
   location.href = url.toString();
 }
-
-/** Read the whole event history of a workspace, page by page (gateway limit is 1000). */
-export async function allEvents(workspaceId) {
-  const events = [];
-  let after = 0;
-  for (;;) {
-    const page = await api.events(workspaceId, { after, limit: 1000 });
-    events.push(...page.events);
-    if (!page.hasMore || page.nextSequence === after) return events;
-    after = page.nextSequence;
-  }
-}

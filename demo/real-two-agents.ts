@@ -19,6 +19,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
 import { runManagedClaude } from '../packages/adapters/src/claude-launcher.js';
+import { localHumanHeaders } from '../packages/adapters/src/local-auth.js';
 
 const args = process.argv.slice(2);
 const has = (flag: string) => args.includes(flag);
@@ -85,7 +86,8 @@ function seedPlayground(): void {
 const api = async <T>(path: string, body?: unknown): Promise<T> => {
   const response = await fetch(`${gatewayUrl}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...localHumanHeaders(gatewayUrl,database), 'content-type': 'application/json' },
+    redirect: 'error',
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`${body === undefined ? 'GET' : 'POST'} ${path} → ${response.status} ${await response.text()}`);

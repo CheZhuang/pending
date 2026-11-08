@@ -9,7 +9,6 @@ import { switchMode } from '../api/index.js';
 import { describe } from '../api/errors.js';
 import { boot, selectWorkspace, state } from '../state.js';
 import { frappe } from '../theme.js';
-import NativeProcesses from './NativeProcesses.vue';
 
 const route = useRoute();
 const showModeSelector = import.meta.env.DEV;
@@ -57,7 +56,7 @@ onMounted(boot);
     >
       <div class="brand">
         <img src="/favicon.svg" alt="" width="26" height="26" />
-        <span>Agentree</span>
+        <span>PendingTree</span>
       </div>
       <NMenu :value="route.meta.menu ?? route.name" :options="menu" />
       <div v-if="!collapsed" class="sider-foot muted">
@@ -85,7 +84,6 @@ onMounted(boot);
       </NLayoutHeader>
 
       <NLayoutContent :native-scrollbar="false" content-style="min-height: calc(100vh - 53px)">
-        <NativeProcesses />
         <NAlert v-if="fatal" type="error" :title="fatal.title" class="banner">
           {{ fatal.hint }}
           <template #action><NButton size="small" @click="boot">Retry</NButton></template>

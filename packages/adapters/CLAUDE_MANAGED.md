@@ -2,7 +2,7 @@
 
 `runManagedClaude()` in [src/claude-launcher.ts](src/claude-launcher.ts) registers a fresh `claude-code` session, allocates its native ID, and launches Claude with temporary hook settings and Agentree MCP configuration. See [native setup](../../docs/NATIVE_AGENTS.md) for the user-facing command.
 
-The child receives `HARNESS_GATEWAY_URL`, `HARNESS_SESSION_ID`, and its session token. The launcher strips the admin token from the child environment. It owns `--settings`, `--session-id`, and `--mcp-config`; conflicting resume/configuration flags are rejected. It removes temporary files on cleanup without editing project or user settings.
+The trusted launcher reads the local human capability file to register the session. The child receives `HARNESS_GATEWAY_URL`, `HARNESS_SESSION_ID`, and only its session token; the human capability is never placed in its environment. The launcher owns `--settings`, `--session-id`, and `--mcp-config`; conflicting resume/configuration flags are rejected. It removes temporary files on cleanup without editing project or user settings. This does not isolate a child with the same OS-user access to the capability file or database; see [the local security model](../../docs/LOCAL_SECURITY.md).
 
 ## Hooks
 

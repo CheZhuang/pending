@@ -14,4 +14,4 @@ export const routes = [
 ];
 
 export const router = createRouter({ history: createWebHashHistory(), routes });
-router.afterEach((to) => { document.title = `${to.meta.title ?? 'Console'} · Agentree`; });
+router.afterEach((to) => { document.title = `${to.meta.title ?? 'Console'} · PendingTree`; });

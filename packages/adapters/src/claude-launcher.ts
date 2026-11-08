@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createClaudeHookSettings } from './claude-settings.js';
 import { nativeStartTime } from './process-platform.js';
+import { localHumanHeaders } from './local-auth.js';
 
 export interface ManagedClaudeSession {
   sessionId: string;
@@ -34,6 +35,7 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
 
   constructor(
     private readonly baseUrl = 'http://localhost:8787',
+    private readonly databasePath?: string,
   ) {}
 
   async bindProcess(sessionId: string, pid: number): Promise<void> {
@@ -54,8 +56,9 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
   async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
       method: 'POST', headers: {
+        ...localHumanHeaders(this.baseUrl, this.databasePath),
         'content-type': 'application/json',
-      }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
+      }, redirect:'error', body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`Gateway session registration failed with HTTP ${response.status}`);
     const data = await response.json() as { sessionId?: string; id?: string; seq?: number; currentSeq?: number; sessionToken?: string };
@@ -141,7 +144,7 @@ export interface ClaudeLaunchOptions {
 export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<number> {
   const cwd = resolve(options.cwd ?? process.cwd());
   const gatewayUrl = options.gatewayUrl ?? 'http://localhost:8787';
-  const gateway = options.gateway ?? new HttpManagedClaudeGateway(gatewayUrl);
+  const gateway = options.gateway ?? new HttpManagedClaudeGateway(gatewayUrl, options.databasePath ?? process.env.AGENTREE_DATABASE_PATH);
   // Fail before launching Claude if the Gateway cannot register the session.
   const nativeId=randomUUID();
   const session = await gateway.registerSession({ runtime: 'claude-code', cwd, label: options.label, nativeId, branchId:options.branchId });

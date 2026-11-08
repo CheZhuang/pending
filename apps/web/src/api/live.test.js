@@ -19,7 +19,7 @@ test('history and preview reject an older Gateway that answers with the current 
   assert.equal((await live.mainRevisions('w')).length, 1);
 });
 
-test('live requests use same-origin paths without pairing credentials', async () => {
+test('live requests use same-origin paths and include the HttpOnly Console cookie', async () => {
   let request;
   globalThis.fetch = async (url, options) => {
     request = { url, options };
@@ -27,21 +27,69 @@ test('live requests use same-origin paths without pairing credentials', async ()
   };
   await live.health();
   assert.equal(request.url, '/health');
-  assert.equal('credentials' in request.options, false);
+  assert.equal(request.options.credentials, 'include');
   assert.equal(request.options.headers.authorization, undefined);
   assert.equal(live.login, undefined);
   assert.equal(live.logout, undefined);
 });
 
-test('local discovery API uses the mock-first contract and same-origin requests', async () => {
-  let request;
-  globalThis.fetch = async (url, options) => { request = { url, options }; return new Response(JSON.stringify({ refreshedAt: 'now', agents: [] }), { status: 200 }); };
-  assert.deepEqual(await live.discoveredAgents(), { refreshedAt: 'now', agents: [] });
-  assert.equal(request.url, '/v1/discovery/agents');
-  assert.equal(request.options.headers.authorization, undefined);
-  await live.refreshDiscovery();
-  assert.equal(request.url, '/v1/discovery/refresh');
-  assert.equal(request.options.method, 'POST');
+test('launcher fragment ticket is erased before exchange and later requests; SSE includes cookies', async () => {
+  const priorWindow = globalThis.window;
+  const priorEventSource = globalThis.EventSource;
+  const priorFetch = globalThis.fetch;
+  const calls = [];
+  const fakeWindow = {
+    location: { hash: '#agentree-ticket=one-use-secret', pathname: '/', search: '?mode=live' },
+    history: { replaceState(_state, _title, path) { fakeWindow.location.hash = ''; fakeWindow.erasedPath = path; } },
+  };
+  globalThis.window = fakeWindow;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options, hash: fakeWindow.location.hash });
+    return new Response(url.endsWith('/v1/console-session') ? '{"ok":true}' : '{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  let eventSource;
+  globalThis.EventSource = class { constructor(url, options) { this.close = () => {}; eventSource = { url, options, close: this.close }; } };
+  try {
+    const { live: freshLive } = await import(`./live.js?auth-test=${Date.now()}`);
+    await freshLive.health();
+    assert.equal(fakeWindow.erasedPath, '/?mode=live');
+    assert.equal(calls[0].url, '/v1/console-session');
+    assert.equal(calls[0].hash, '', 'fragment is removed before the ticket is sent');
+    assert.equal(calls[0].options.body, JSON.stringify({ ticket: 'one-use-secret' }));
+    assert.equal(calls[0].options.credentials, 'include');
+    assert.equal(calls[1].options.credentials, 'include');
+    const stop = freshLive.stream('workspace', 0, { onEvent() {}, onStatus() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(eventSource.options.withCredentials, true);
+    assert.doesNotMatch(eventSource.url, /one-use-secret/);
+    stop();
+  } finally {
+    globalThis.window = priorWindow;
+    globalThis.EventSource = priorEventSource;
+    globalThis.fetch = priorFetch;
+  }
+});
+
+test('discovery uses the implemented Gateway process inventory, not invented endpoints', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => { calls.push({ url, options }); return new Response(JSON.stringify({ status: 'ok', processes: [] }), { status: 200 }); };
+  assert.deepEqual(await live.processes(), { status: 'ok', processes: [] });
+  await live.refreshProcesses();
+  assert.deepEqual(calls.map((c) => [c.url, c.options.method ?? 'GET']), [['/v1/processes', 'GET'], ['/v1/processes/refresh', 'POST']]);
+  for (const c of calls) { assert.equal(c.options.credentials, 'include'); assert.equal(c.options.headers.authorization, undefined); }
+  assert.equal(live.discoveredAgents, undefined);
+  assert.equal(live.refreshDiscovery, undefined);
+  assert.equal(live.startManagedAgent, undefined);
+});
+
+test('API errors keep the Gateway code and always produce readable text', async () => {
+  const { errorText } = await import('./errors.js');
+  respond(500, { error: { code: 'INTERNAL', message: 'boom' } });
+  await assert.rejects(() => live.sessions(), (e) => e.code === 'INTERNAL' && errorText(e) === 'INTERNAL · boom');
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  await assert.rejects(() => live.processes(), (e) => e.code === 'NETWORK' && /not reachable/.test(errorText(e)));
+  respond(401, {});
+  await assert.rejects(() => live.workspaces(), (e) => e.code === 'HTTP_401' && /Open PendingTree from the local CLI/.test(errorText(e)));
 });
 
 test('restore on an older Gateway is reported as unsupported; real errors pass through with details', async () => {

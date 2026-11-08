@@ -20,6 +20,11 @@ export class TaskDispatch {
       id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL CHECK(json_valid(request_json)),
       status TEXT NOT NULL, updated_at TEXT NOT NULL, native_turn_id TEXT, reason TEXT);
       CREATE INDEX IF NOT EXISTS gateway_tasks_session ON gateway_tasks(json_extract(request_json,'$.sessionId'));
+      CREATE INDEX IF NOT EXISTS gateway_tasks_session_status ON gateway_tasks(json_extract(request_json,'$.sessionId'),status);
+      CREATE INDEX IF NOT EXISTS gateway_tasks_native_turn ON gateway_tasks(json_extract(request_json,'$.sessionId'),native_turn_id);
+      CREATE INDEX IF NOT EXISTS gateway_tasks_inflight ON gateway_tasks(status);
+      CREATE INDEX IF NOT EXISTS gateway_task_native_events ON events(workspace_id,json_extract(data,'$.sessionId'),
+        coalesce(json_extract(data,'$.payload.params.turn.id'),json_extract(data,'$.payload.params.turnId')),sequence);
       CREATE TRIGGER IF NOT EXISTS gateway_task_request_immutable BEFORE UPDATE ON gateway_tasks
         WHEN OLD.request_json != NEW.request_json OR OLD.request_id != NEW.request_id OR OLD.id != NEW.id
         BEGIN SELECT RAISE(ABORT,'task request is immutable'); END;
@@ -28,17 +33,23 @@ export class TaskDispatch {
     // Any nonterminal native work may have progressed without a durable terminal
     // observation. Do not leave stale active states blocking this session's queue,
     // and never redeliver work whose native outcome is uncertain.
-    const inFlight=new Set<TaskStatus>(['delivery-pending','native-accepted','running','cancel-requested']);
-    for(const task of this.listAll())if(inFlight.has(task.status))this.transition(task,'outcome-unknown','Gateway restarted before terminal native evidence');
+    const inFlight=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE status IN ('delivery-pending','native-accepted','running','cancel-requested')").all() as {id:string}[];
+    for(const task of inFlight)this.transition(this.get(task.id),'outcome-unknown','Gateway restarted before terminal native evidence');
   }
   private row(id:string):DispatchTask|undefined {
     const r=this.store.db.prepare('SELECT request_json,status,updated_at,native_turn_id,reason FROM gateway_tasks WHERE id=?').get(id) as {request_json:string;status:TaskStatus;updated_at:string;native_turn_id:string|null;reason:string|null}|undefined;
-    return r?{...JSON.parse(r.request_json) as TaskRequest,status:r.status,updatedAt:r.updated_at,...(r.native_turn_id?{nativeTurnId:r.native_turn_id}:{}),...(r.reason?{reason:r.reason}:{})}:undefined;
+    return r?this.taskFromRow(r):undefined;
+  }
+  private taskFromRow(r:{request_json:string;status:TaskStatus;updated_at:string;native_turn_id:string|null;reason:string|null}):DispatchTask {
+    return {...JSON.parse(r.request_json) as TaskRequest,status:r.status,updatedAt:r.updated_at,...(r.native_turn_id?{nativeTurnId:r.native_turn_id}:{}),...(r.reason?{reason:r.reason}:{})};
   }
   get(id:string):DispatchTask {const t=this.row(id);if(!t)throw new DomainError('NOT_FOUND','Task not found');return t;}
   byRequestId(requestId:string):DispatchTask|undefined {const r=this.store.db.prepare('SELECT id FROM gateway_tasks WHERE request_id=?').get(requestId) as {id:string}|undefined;return r?this.get(r.id):undefined;}
-  private listAll():DispatchTask[] {return (this.store.db.prepare('SELECT id FROM gateway_tasks ORDER BY rowid DESC').all() as {id:string}[]).map(x=>this.get(x.id));}
-  list(sessionId?:string):DispatchTask[] {return this.listAll().filter(t=>!sessionId||t.sessionId===sessionId);}
+  list(sessionId?:string):DispatchTask[] {
+    const sql="SELECT request_json,status,updated_at,native_turn_id,reason FROM gateway_tasks"+(sessionId?" WHERE json_extract(request_json,'$.sessionId')=?":"")+' ORDER BY rowid DESC';
+    const rows=sessionId?this.store.db.prepare(sql).all(sessionId):this.store.db.prepare(sql).all();
+    return rows.map(r=>this.taskFromRow(r as {request_json:string;status:TaskStatus;updated_at:string;native_turn_id:string|null;reason:string|null}));
+  }
   heartbeat(sessionId:string):void {this.runners.set(sessionId,Date.now());}
   available(sessionId:string):boolean {return Date.now()-(this.runners.get(sessionId)??0)<5000;}
   submit(input:{requestId:string;instructions:string;includeMain:boolean;mainContext:TaskRequest['mainContext']},session:Session):DispatchTask {
@@ -58,9 +69,10 @@ export class TaskDispatch {
   }
   claim(sessionId:string):DispatchTask|null {
     this.heartbeat(sessionId);
-    const list=this.list(sessionId);
-    if(list.some(t=>['delivery-pending','native-accepted','running','cancel-requested'].includes(t.status)))return null;
-    const task=list.reverse().find(t=>t.status==='submitted');
+    const active=this.store.db.prepare("SELECT 1 AS active FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND status IN ('delivery-pending','native-accepted','running','cancel-requested') LIMIT 1").get(sessionId);
+    if(active)return null;
+    const oldest=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND status='submitted' ORDER BY rowid ASC LIMIT 1").get(sessionId) as {id:string}|undefined;
+    const task=oldest?this.get(oldest.id):undefined;
     return task?this.transition(task,'delivery-pending'):null;
   }
   accepted(id:string,sessionId:string,nativeTurnId:string):DispatchTask {
@@ -70,7 +82,11 @@ export class TaskDispatch {
     const accepted=this.transition(t,'native-accepted',undefined,nativeTurnId);
     if(t.status==='cancel-requested')this.transition(accepted,'cancel-requested','Human requested interruption');
     // Native observations can race ahead of the turn/start HTTP acknowledgement.
-    const events=this.store.db.prepare("SELECT data FROM events WHERE json_extract(data,'$.sessionId')=? AND json_extract(data,'$.type') IN ('turn/started','turn/completed') ORDER BY sequence").all(sessionId) as {data:string}[];
+    const events=this.store.db.prepare(`SELECT data FROM events
+      WHERE workspace_id=? AND json_extract(data,'$.sessionId')=?
+        AND json_extract(data,'$.type') IN ('turn/started','turn/completed')
+        AND coalesce(json_extract(data,'$.payload.params.turn.id'),json_extract(data,'$.payload.params.turnId')) =?
+      ORDER BY sequence`).all(t.workspaceId,sessionId,nativeTurnId) as {data:string}[];
     for(const row of events){const e=JSON.parse(row.data) as {type:string;payload:unknown};this.observe(sessionId,e.type,e.payload);}
     return this.get(id);
   }
@@ -91,7 +107,8 @@ export class TaskDispatch {
     const p=payload as {params?:{turn?:{id?:string;status?:string;error?:unknown};turnId?:string}};
     const nativeTurnId=p?.params?.turn?.id??p?.params?.turnId;
     if(!nativeTurnId)return;
-    const task=this.list(sessionId).find(t=>t.nativeTurnId===nativeTurnId);
+    const match=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE native_turn_id=? AND json_extract(request_json,'$.sessionId')=? ORDER BY rowid DESC LIMIT 1").get(nativeTurnId,sessionId) as {id:string}|undefined;
+    const task=match?this.get(match.id):undefined;
     if(!task||(terminal.has(task.status)&&task.status!=='outcome-unknown'))return;
     if(type==='turn/started'&&task.status==='native-accepted')this.transition(task,'running');
     if(type==='turn/completed') {
@@ -100,7 +117,8 @@ export class TaskDispatch {
     }
   }
   sessionEnded(sessionId:string):void {
-    for(const t of this.list(sessionId))if(!terminal.has(t.status))this.transition(t,t.status==='submitted'?'delivery-unavailable':'outcome-unknown','Session ended without terminal task evidence');
+    const active=this.store.db.prepare("SELECT id FROM gateway_tasks WHERE json_extract(request_json,'$.sessionId')=? AND status IN ('submitted','delivery-pending','native-accepted','running','cancel-requested')").all(sessionId) as {id:string}[];
+    for(const row of active){const t=this.get(row.id);this.transition(t,t.status==='submitted'?'delivery-unavailable':'outcome-unknown','Session ended without terminal task evidence');}
     this.runners.delete(sessionId);
   }
 }

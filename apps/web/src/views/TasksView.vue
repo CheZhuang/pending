@@ -6,17 +6,18 @@ import { computed, h, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   NAlert, NButton, NCard, NCheckbox, NDataTable, NDescriptions, NDescriptionsItem, NDrawer, NDrawerContent,
-  NInput, NSelect, NSpace, NTag, NTimeline, NTimelineItem, NTooltip, useMessage,
+  NEmpty, NInput, NSelect, NSpace, NTag, NTimeline, NTimelineItem, NTooltip, useDialog, useMessage,
 } from 'naive-ui';
 import { api } from '../api/index.js';
-import { describe } from '../api/errors.js';
-import { state } from '../state.js';
+import { describe, errorText } from '../api/errors.js';
+import { loadOlder, state } from '../state.js';
 import { useData } from '../useData.js';
 import { clip, dateTime, eventSummary, short, time } from '../format.js';
 import { sessionLabel } from '../model.js';
 import { CANCELLABLE, composeInstructions, deliveryOf, statusInfo, taskEvidence } from '../task-status.js';
 
 const message = useMessage();
+const dialog = useDialog();
 const route = useRoute();
 const router = useRouter();
 
@@ -73,13 +74,25 @@ const selected = computed(() => data.value?.tasks.find((t) => t.id === selectedI
 const openTask = (task) => { selectedId.value = task.id; };
 const evidence = computed(() => (selected.value ? taskEvidence(selected.value, state.events) : []));
 const cancelling = ref(null);
-async function cancel(task) {
+// Interrupting a running native turn cannot be undone; a not-yet-delivered task just never starts.
+function cancel(task) {
+  const delivered = task.status !== 'submitted';
+  dialog.warning({
+    title: delivered ? 'Interrupt this task?' : 'Cancel this task?',
+    content: delivered
+      ? 'PendingTree asks the runner to interrupt the native turn. Work already done by the agent is not undone, and the final status waits for native evidence.'
+      : 'The task has not been delivered yet; it will not be sent to the agent.',
+    positiveText: delivered ? 'Interrupt' : 'Cancel task', negativeText: 'Keep it',
+    onPositiveClick: () => doCancel(task),
+  });
+}
+async function doCancel(task) {
   cancelling.value = task.id;
   try {
     const result = await api.cancelTask(task.id);
     message.info(`Cancel requested · now ${statusInfo(result.status).label}. Final status waits for native evidence.`);
     await reload();
-  } catch (e) { const d = describe(e); message.error(`${d.title}${d.hint ? ` — ${d.hint}` : ''}`); }
+  } catch (e) { message.error(errorText(e), { duration: 7000 }); await reload(); }
   finally { cancelling.value = null; }
 }
 const toActivity = (task) => router.push({ path: '/activity', query: { session: task.sessionId } });
@@ -125,7 +138,9 @@ const rowProps = (t) => ({ style: 'cursor: pointer', onClick: () => openTask(t) 
     </NCard>
 
     <NCard title="Tasks" size="small">
-      <NDataTable :columns="columns" :data="data?.tasks ?? []" :row-key="(t) => t.id" :row-props="rowProps" size="small" :bordered="false" :scroll-x="860" />
+      <NDataTable :columns="columns" :data="data?.tasks ?? []" :row-key="(t) => t.id" :row-props="rowProps" size="small" :bordered="false" :scroll-x="860" :loading="!data && !error">
+        <template #empty><NEmpty size="small" :description="data ? 'No tasks dispatched in this workspace yet.' : 'Loading tasks…'" /></template>
+      </NDataTable>
     </NCard>
 
     <NDrawer :show="!!selected" :width="'min(600px, 100vw)'" @update:show="(v) => { if (!v) selectedId = null; }">
@@ -152,6 +167,10 @@ const rowProps = (t) => ({ style: 'cursor: pointer', onClick: () => openTask(t) 
         </template>
         <h4>Delivery evidence</h4>
         <p v-if="!evidence.length" class="muted small">No task records in the loaded activity yet.</p>
+        <p v-if="state.history.hasOlder && Date.parse(selected.submittedAt) < Date.parse(state.events[0]?.occurredAt ?? '')" class="muted small">
+          This task is older than the loaded activity window, so some evidence may not be shown.
+          <NButton size="tiny" secondary :loading="state.history.loadingOlder" @click="loadOlder">Load older events</NButton>
+        </p>
         <NTimeline v-else>
           <NTimelineItem v-for="e in evidence" :key="e.sequence" :type="e.mode === 'observed' ? 'info' : 'default'"
             :title="`${e.type} · ${e.mode === 'observed' ? 'native evidence' : 'Gateway record'}`" :time="`#${e.sequence} · ${time(e.occurredAt)}`">
