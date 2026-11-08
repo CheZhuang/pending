@@ -70,20 +70,18 @@ export function createGateway(options: GatewayOptions) {
         const bound = store.get<Session>(sessionId, 'session');
         if (bound) audit('correction.delivery-state', { changes }, bound.workspaceId, sessionId);
     }));
-    const withConflictEvidence = (workspaceId: string, conflicts: ReturnType<AgentreeService['conflicts']>, includeEvidence: boolean) => {
+    const withConflictEvidence = async (workspaceId: string, conflicts: ReturnType<AgentreeService['conflicts']>, includeEvidence: boolean) => {
         if (!includeEvidence) return conflicts;
         const workspace = store.get<Workspace>(workspaceId, 'workspace');
         if (!workspace) return conflicts;
-        const inspected = new Map<string, ReturnType<typeof collectConflictEvidence>[number]>();
-        return conflicts.map(conflict => ({ ...conflict, fileEvidence: conflict.files.slice(0, 12).flatMap(file => {
-            const key = `${file.rootId}:${file.path}`;
-            let evidence = inspected.get(key);
-            if (!evidence && inspected.size < 12) {
-                evidence = collectConflictEvidence(workspace, { ...conflict, files: [file] })[0];
-                if (evidence) inspected.set(key, evidence);
-            }
-            return evidence ? [evidence] : [];
-        }) }));
+        const files = [...new Map(conflicts.flatMap(c => c.files).map(f => [JSON.stringify(f),f])).values()].slice(0,12);
+        if (!files.length) return conflicts;
+        const evidence = await collectConflictEvidence(workspace,{...conflicts[0]!,files});
+        const inspected = new Map(evidence.map(e => [JSON.stringify(e.file),e]));
+        return conflicts.map(conflict => ({...conflict,fileEvidence:conflict.files.slice(0,12).flatMap(file => {
+            const item = inspected.get(JSON.stringify(file));
+            return item ? [item] : [];
+        })}));
     };
     const tasks = new TaskDispatch(store,(type,task)=>audit(type,{taskId:task.id,requestId:task.requestId,status:task.status,nativeTurnId:task.nativeTurnId,reason:task.reason},task.workspaceId,task.sessionId));
     const approvals = () => (store.db.prepare('SELECT data FROM gateway_approvals ORDER BY rowid').all() as {
@@ -547,7 +545,7 @@ export function createGateway(options: GatewayOptions) {
                         }));
                         return send(view);
                     }
-                    if (kind === 'conflicts') return send(withConflictEvidence(wid!, svc.conflicts(wid!), isAdmin && url.searchParams.get('evidence') === '1'));
+                    if (kind === 'conflicts') return send(await withConflictEvidence(wid!, svc.conflicts(wid!), isAdmin && url.searchParams.get('evidence') === '1'));
                     return send(svc.merges(wid!));
                 }
                 if (method === 'POST' && kind === 'conflicts') {
@@ -576,8 +574,8 @@ export function createGateway(options: GatewayOptions) {
                 }
                 if (method === 'POST' && kind === 'merge') {
                     human();
-                    const b = z.object({workIds:z.array(text).min(1),decision:z.enum(['accepted','rejected']),expectedMainRevision:z.number().int().min(0)}).parse(await body(req));
-                    return send(admin.decideMerge(branchId!,b.workIds,b.decision,b.expectedMainRevision),201);
+                    const b = z.object({workIds:z.array(text).min(1),decision:z.enum(['accepted','rejected']),expectedMainRevision:z.number().int().min(0),overrideConflicts:z.boolean().default(false)}).parse(await body(req));
+                    return send(admin.decideMerge(branchId!,b.workIds,b.decision,b.expectedMainRevision,b.overrideConflicts),201);
                 }
             }
             if (method === 'GET' && options.consoleDirectory && !path.startsWith('/v1/')) {
@@ -598,7 +596,7 @@ export function createGateway(options: GatewayOptions) {
         catch (error) {
             const code = error instanceof DomainError ? error.code : error instanceof z.ZodError || error instanceof SyntaxError ? 'BODY' : 'INTERNAL';
             const details = error instanceof DomainError ? error.details : undefined;
-            send({ error: { code, message: code === 'INTERNAL' ? 'Internal server error' : (error as Error).message, ...(details === undefined ? {} : {details}) } }, code === 'NOT_FOUND' ? 404 : code === 'DENY' || code === 'IDENTITY' ? 403 : ['STATE', 'STALE', 'REVIEW', 'REQUIRE-APPROVAL'].includes(code) ? 409 : code === 'INTERNAL' ? 500 : 400);
+            send({ error: { code, message: code === 'INTERNAL' ? 'Internal server error' : (error as Error).message, ...(details === undefined ? {} : {details}) } }, code === 'NOT_FOUND' ? 404 : code === 'DENY' || code === 'IDENTITY' ? 403 : ['STATE', 'STALE', 'CONFLICT', 'REVIEW', 'REQUIRE-APPROVAL'].includes(code) ? 409 : code === 'INTERNAL' ? 500 : 400);
         }
     });
     return { server, store, close: async () => {

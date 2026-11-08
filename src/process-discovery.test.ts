@@ -33,7 +33,7 @@ before(async () => {
 });
 
 after(async () => {
-  await gateway.close();
+  await gateway?.close();
   await rm(directory, { recursive: true, force: true });
 });
 

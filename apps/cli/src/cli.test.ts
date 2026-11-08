@@ -53,7 +53,9 @@ test('human supervises proposed work, conflict disposition, correction, and Main
     const conflict = f.cli('conflict', 'list', '--json').json().data.find((c: { mainEntryId?: string; branchIds: string[] }) => c.mainEntryId === main.id && c.branchIds.includes(a.branchId));
     assert.ok(conflict); assert.equal(f.cli('conflict', 'decide', conflict.id, 'confirmed', 'Agent reported incompatibility with active header requirement.').code, 0);
     assert.equal(f.cli('correction', 'send', 'a', 'Preserve x-request-id in error responses.', '--json').json().data.branchId, a.branchId);
-    const accepted = f.cli('work', 'accept', 'a', work.id, '--json').json().data; assert.equal(accepted.state, 'accepted');
+    assert.equal(f.cli('work', 'accept', 'a', work.id, '--json').code, 5);
+    const accepted = f.cli('work', 'accept', 'a', work.id, '--override-conflicts', '--json').json().data;
+    assert.equal(accepted.overrideConflicts, true); assert.equal(accepted.state, 'accepted');
     assert.ok(f.cli('main', '--json').json().data.entries.some((e: { sourceWorkId?: string }) => e.sourceWorkId === work.id));
     assert.equal(f.cli('--as', a.id, 'main', 'add', 'forbidden', '--json').code, 3);
     assert.equal(f.cli('merge', 'nonsense').code, 2); assert.equal(w.name, 'demo');

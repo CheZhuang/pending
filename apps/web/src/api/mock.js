@@ -125,13 +125,23 @@ export function createMock({ speed = 1, discoveryScenario = 'default', noWorkspa
   observe(sessions[0], 'tool.result', { tool: 'Edit', output: 'Updated token expiry validation' });
   observe(sessions[1], 'item/completed', { method: 'item/completed', params: { item: { type: 'fileChange', changes: [{ path: `${ROOT}/src/api/errors.ts`, kind: 'update' }] } } });
 
+  // Same rule as AgentreeService.acceptanceWarnings: open conflicts on the branch that
+  // involve this work (by evidence id or shared file, or any when there is no evidence),
+  // and current Main entries sharing a file. Read-model only, never stored on the work.
+  const sameFile = (a, b) => a.rootId === b.rootId && a.path === b.path;
+  const acceptanceWarnings = (branchId, items) => ({
+    unresolvedConflictIds: conflicts.filter(c => ['potential', 'confirmed'].includes(c.status) && c.branchIds.includes(branchId)
+      && (!c.evidenceIds.length || items.some(w => !w.files.length || c.evidenceIds.includes(w.id) || c.files.some(f => w.files.some(wf => sameFile(f, wf)))))).map(c => c.id),
+    overlappingMainEntryIds: main.filter(e => !e.removed && items.some(w => w.files.some(f => (e.files ?? []).some(ef => sameFile(f, ef))))).map(e => e.id),
+  });
   const branchOverview = branchId => {
     const branch = branches.find(b => b.id === branchId);
     if (!branch || branch.id === workspace.mainBranchId) throw new ApiError(404, 'NOT_FOUND', branchId);
     const branchSessions = sessions.filter(s => s.branchId === branchId);
     const branchWork = work.filter(w => w.branchId === branchId);
     return {
-      branch: copy(branch), sessions: copy(branchSessions), work: copy(branchWork),
+      branch: copy(branch), sessions: copy(branchSessions),
+      work: copy(branchWork.map(w => (w.state === 'proposed' ? { ...w, acceptanceWarnings: acceptanceWarnings(branchId, [w]) } : w))),
       files: copy([...new Map(branchWork.flatMap(w => w.files).map(f => [`${f.rootId}:${f.path}`, f])).values()]),
       recentActivity: copy(events.filter(e => branchSessions.some(s => s.id === e.sessionId)).slice(-30).reverse()),
       corrections: copy(corrections.filter(c => c.branchId === branchId)),
@@ -267,9 +277,13 @@ export function createMock({ speed = 1, discoveryScenario = 'default', noWorkspa
       stale(input.expectedMainRevision);
       const selected = work.filter(w => w.branchId === id && input.workIds.includes(w.id) && w.state === 'proposed');
       if (selected.length !== input.workIds.length) throw new ApiError(409, 'STATE', 'Work is no longer proposed.');
+      const warnings = acceptanceWarnings(id, selected);
+      const overrideConflicts = input.decision === 'accepted' && !!input.overrideConflicts;
+      if (input.decision === 'accepted' && warnings.unresolvedConflictIds.length && !overrideConflicts)
+        throw new ApiError(409, 'CONFLICT', 'Selected work has unresolved conflicts; explicit human override is required', { warnings });
       if (input.decision === 'accepted') for (const item of selected) { item.state = 'accepted'; commit([{ id: uid(), body: item.body, files: item.files, sourceWorkId: item.id }]); }
       else for (const item of selected) item.state = 'rejected';
-      const merge = { id: uid(), workspaceId: workspace.id, sourceBranchId: id, workIds: input.workIds, state: input.decision, mainRevision: mainBranch.revision, actor: human, createdAt: stamp() };
+      const merge = { id: uid(), workspaceId: workspace.id, sourceBranchId: id, workIds: input.workIds, state: input.decision, warnings, overrideConflicts, mainRevision: mainBranch.revision, actor: human, createdAt: stamp() };
       merges.push(merge); emit('merge.decided', merge); return copy(merge);
     }),
     merges: async () => { await wait(); return copy(merges); },

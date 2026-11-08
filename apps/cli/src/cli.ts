@@ -32,7 +32,7 @@ Supervision (all writes are human authorized)
   main remove <entry-id>
   main history <entry-id>
   branch show <branch>
-  work list <branch> | work accept <branch> <work-id...> | work reject <branch> <work-id...>
+  work list <branch> | work accept <branch> <work-id...> [--override-conflicts] | work reject <branch> <work-id...>
   conflict list | conflict decide <id> <confirmed|resolved|dismissed> <explanation>
   correction send <branch> <body>
   merge list
@@ -42,7 +42,7 @@ const OPTIONS = {
   json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, db: { type: 'string' }, workspace: { type: 'string', short: 'w' }, as: { type: 'string' },
   root: { type: 'string', multiple: true }, agent: { type: 'string' }, name: { type: 'string' }, runtime: { type: 'string' }, native: { type: 'string' },
   session: { type: 'string' }, type: { type: 'string' }, source: { type: 'string' }, audit: { type: 'boolean' }, after: { type: 'string' }, limit: { type: 'string' },
-  file: { type: 'string', multiple: true },
+  file: { type: 'string', multiple: true }, 'override-conflicts': { type: 'boolean' },
 } as const;
 type Values = ReturnType<typeof parse>['values'];
 const parse = (argv: string[]) => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true });
@@ -155,7 +155,7 @@ function workCmd(ctx: Ctx, sub: string) {
   if (sub === 'list') return emit(ctx, overview.work, () => table(['state', 'id', 'work'], overview.work.map((x) => [x.state, short(x.id), clip(x.body, 100)])));
   if (sub === 'accept' || sub === 'reject') {
     const ids = ctx.pos.slice(3).map((id) => pickOne(overview.work, id, 'work item', (x) => [x.id]).id); if (!ids.length) throw new CliError('USAGE', `Usage: agentree work ${sub} <branch> <work-id...>`);
-    const revision = ctx.gw.service.main(w.id).revision; const result = ctx.gw.service.decideMerge(b.id, ids, sub === 'accept' ? 'accepted' : 'rejected', revision);
+    const revision = ctx.gw.service.main(w.id).revision; const result = ctx.gw.service.decideMerge(b.id, ids, sub === 'accept' ? 'accepted' : 'rejected', revision, !!ctx.values['override-conflicts']);
     return emit(ctx, result, () => `${sub === 'accept' ? 'Accepted into Main' : 'Rejected'} ${ids.length} work item(s); Main revision ${result.mainRevision}`);
   }
   throw new CliError('USAGE', `Unknown work command ${sub}`);

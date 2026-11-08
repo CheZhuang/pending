@@ -4,7 +4,7 @@ import { SqliteStore } from '../../storage/src/index.js';
 import {
     DomainError, mainInputSchema, workInputSchema, type Actor, type Branch, type MainEntry,
     type MainInput, type MainSnapshot, type MainRevision, type BranchWork, type WorkInput, type FileRef,
-    type Merge, type Correction, type Conflict, type BranchOverview, type SupervisionContext,
+    type AcceptanceWarnings, type Merge, type Correction, type Conflict, type BranchOverview, type SupervisionContext,
     type NormalizedEvent, type Operation, type PolicyDecision, type Session, type Workspace,
     type EventQuery, type EventPage,
 } from '../../contracts/src/index.js';
@@ -289,7 +289,8 @@ export class AgentreeService {
             if (parsed.conflictsWithMain.some(entryId => !main.entries.some(e => e.id === entryId)))
                 throw new DomainError('MAIN','Incompatibility must reference a current Main entry');
             const work: BranchWork = {id:id(),workspaceId:branch.workspaceId,branchId,sessionId:session.id,
-                ...parsed,files:this.files(branch.workspaceId,parsed.files),state:'proposed',createdAt:new Date().toISOString()};
+                ...parsed,files:this.files(branch.workspaceId,parsed.files),state:'proposed',createdAt:new Date().toISOString(),
+                observationThroughSequence:this.store.sessionSequence(branch.workspaceId,session.id)};
             this.store.insert(work.id,'branch-work',work);
             branch.revision++;
             this.store.put(branch.id,'branch',branch);
@@ -298,9 +299,13 @@ export class AgentreeService {
         });
     }
     branchOverview(branchId: string): BranchOverview {
-        return this.overview(branchId).overview;
+        const overview = this.overview(branchId).overview;
+        const conflicts = this.conflicts(overview.branch.workspaceId);
+        const main = this.main(overview.branch.workspaceId);
+        return {...overview,work:overview.work.map(work => work.state === 'proposed'
+            ? {...work,acceptanceWarnings:this.acceptanceWarnings(overview.branch.id,[work],conflicts,main)} : work)};
     }
-    /** Overview plus every observed write, so file evidence never ages out of the 30-event activity window. */
+    /** Proposed work and pending observations; full audit history remains available separately. */
     private overview(branchId: string): { overview: BranchOverview; writes: Array<{ eventId: string; file: FileRef }> } {
         this.guard('context.read',branchId);
         const branch = this.get<Branch>(branchId,'branch');
@@ -308,9 +313,13 @@ export class AgentreeService {
         if (branch.id === workspace.mainBranchId) throw new DomainError('BRANCH','Main is the shared reference; use the Main API');
         const sessions = this.store.list<Session>('session').filter(s => s.branchId === branchId);
         const activity = this.store.recentSessionEvents(branch.workspaceId,sessions.map(s => s.id));
-        const writes = this.store.observedSessionEvents(branch.workspaceId,sessions.map(s => s.id)).flatMap(e =>
-            extractTouches(e,workspace.roots).filter(t => t.access === 'write').map(t => ({eventId:e.id,file:{rootId:t.rootId!,path:t.path}})));
         const work = this.store.list<BranchWork>('branch-work').filter(w => w.branchId === branchId);
+        const writes = sessions.flatMap(session => {
+            const settledThrough = work.filter(w => w.sessionId === session.id && w.state !== 'proposed')
+                .reduce((through,w) => Math.max(through,w.observationThroughSequence ?? this.store.proposalSequence(branch.workspaceId,w.id)),0);
+            return this.store.pendingSessionEvents(branch.workspaceId,session.id,settledThrough);
+        }).flatMap(e => extractTouches(e,workspace.roots).filter(t => t.access === 'write')
+            .map(t => ({eventId:e.id,file:{rootId:t.rootId!,path:t.path}})));
         const files = [...work.filter(w => w.state === 'proposed').flatMap(w => w.files), ...writes.map(w => w.file)];
         // Corrections are addressed to one branch: an agent reading a sibling branch does not see them.
         const ownBranch = this.actor.type === 'agent' ? this.session().branchId : undefined;
@@ -319,10 +328,9 @@ export class AgentreeService {
         return {overview:{branch,sessions,work,files:[...new Map(files.map(f => [JSON.stringify(f),f])).values()],
             recentActivity:activity,corrections},writes};
     }
-    /** The id depends on what the signal is about, never on its evidence: new evidence for the same
-     *  branches and file updates the signal instead of reopening a decided one under a new id. */
+    /** A disposition applies to exactly this evidence set, including the Main revision. */
     private signal(workspaceId: string, basis: string, branchIds: string[], files: FileRef[], evidenceIds: string[], explanation: string, mainEntryId?: string): Conflict {
-        const stable = JSON.stringify([workspaceId,basis,[...branchIds].sort(),files,mainEntryId ?? null]);
+        const stable = JSON.stringify([workspaceId,basis,[...branchIds].sort(),files,mainEntryId ?? null,[...new Set(evidenceIds)].sort()]);
         return {id:`conflict:${createHash('sha256').update(stable).digest('hex').slice(0,24)}`,workspaceId,branchIds,files,evidenceIds,explanation,
             ...(mainEntryId ? {mainEntryId} : {}),status:'potential'};
     }
@@ -360,7 +368,9 @@ export class AgentreeService {
         }
         const stored = this.store.list<Conflict>('conflict').filter(c => c.workspaceId === workspaceId);
         const result = new Map(signals.map(c => [c.id,c]));
-        for (const conflict of stored) result.set(conflict.id,conflict);
+        // Derived decisions only remain current while their exact evidence remains relevant.
+        // Manual reports have independent human lifecycles. Both retain immutable audit events.
+        for (const conflict of stored) if (result.has(conflict.id) || !conflict.id.startsWith('conflict:')) result.set(conflict.id,conflict);
         return [...result.values()];
     }
     reportConflict(workspaceId: string, input: {branchIds:string[];mainEntryId?:string;explanation:string}): Conflict {
@@ -399,8 +409,18 @@ export class AgentreeService {
         this.workspace(workspaceId);
         return this.store.list<Merge>('acceptance').filter(m => m.workspaceId === workspaceId);
     }
+    private acceptanceWarnings(branchId: string, works: BranchWork[], conflicts: Conflict[], main: MainSnapshot): AcceptanceWarnings {
+        const same = (a: FileRef,b: FileRef) => a.rootId === b.rootId && a.path === b.path;
+        return {
+            unresolvedConflictIds:conflicts.filter(c => ['potential','confirmed'].includes(c.status) && c.branchIds.includes(branchId)
+                && (!c.evidenceIds.length || works.some(w => !w.files.length || c.evidenceIds.includes(w.id)
+                    || w.eventIds.some(id => c.evidenceIds.includes(id)) || c.files.some(f => w.files.some(wf => same(f,wf)))))).map(c => c.id),
+            overlappingMainEntryIds:main.entries.filter(e => works.some(w => w.conflictsWithMain.includes(e.id)
+                || w.files.some(f => e.files.some(ef => same(f,ef))))).map(e => e.id),
+        };
+    }
     /** Accept work records and shared conclusions only. This method never touches source files or Git. */
-    decideMerge(branchId: string, workIds: string[], decision: 'accepted' | 'rejected', expectedMainRevision: number): Merge {
+    decideMerge(branchId: string, workIds: string[], decision: 'accepted' | 'rejected', expectedMainRevision: number, overrideConflicts = false): Merge {
         this.guard('merge.decide',branchId);
         const branch = this.get<Branch>(branchId,'branch');
         return this.store.transaction(() => {
@@ -410,6 +430,9 @@ export class AgentreeService {
             const works = workIds.map(workId => this.get<BranchWork>(workId,'branch-work'));
             if (works.some(work => work.branchId !== branchId || work.state !== 'proposed'))
                 throw new DomainError('MERGE','Work must be pending on the selected branch');
+            const warnings = this.acceptanceWarnings(branchId,works,this.conflicts(branch.workspaceId),this.main(branch.workspaceId));
+            if (decision === 'accepted' && warnings.unresolvedConflictIds.length && !overrideConflicts)
+                throw new DomainError('CONFLICT','Selected work has unresolved conflicts; explicit human override is required', {warnings});
             for (const work of works) {
                 if (decision === 'accepted') this.writeMain(branch.workspaceId,{body:work.body,files:work.files},undefined,false,work.id);
                 work.state = decision;
@@ -418,7 +441,7 @@ export class AgentreeService {
             branch.revision++;
             this.store.put(branch.id,'branch',branch);
             const merge: Merge = {id:id(),workspaceId:branch.workspaceId,sourceBranchId:branchId,workIds:[...workIds],
-                state:decision,mainRevision:this.mainBranch(branch.workspaceId).revision,actor:this.actor,createdAt:new Date().toISOString()};
+                state:decision,warnings,overrideConflicts:decision === 'accepted' && overrideConflicts,mainRevision:this.mainBranch(branch.workspaceId).revision,actor:this.actor,createdAt:new Date().toISOString()};
             this.store.insert(merge.id,'acceptance',merge);
             this.audit('merge.decided',merge,branch.workspaceId);
             return merge;
@@ -426,9 +449,15 @@ export class AgentreeService {
     }
     supervision(workspaceId: string): SupervisionContext {
         const w = this.workspace(workspaceId);
-        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => this.branchOverview(b.id));
+        const main = this.main(workspaceId);
+        const conflicts = this.conflicts(workspaceId);
+        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => {
+            const overview = this.overview(b.id).overview;
+            return {...overview,work:overview.work.map(work => work.state === 'proposed'
+                ? {...work,acceptanceWarnings:this.acceptanceWarnings(b.id,[work],conflicts,main)} : work)};
+        });
         const ownBranch = this.actor.type === 'agent' ? this.session().branchId : undefined;
-        return {main:this.main(workspaceId),branches,conflicts:this.conflicts(workspaceId),
+        return {main,branches,conflicts,
             corrections:branches.filter(b => !ownBranch || b.branch.id === ownBranch).flatMap(b => b.corrections)};
     }
     /** Native runtimes retain responsibility for executing approved actions. */

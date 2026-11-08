@@ -3,7 +3,7 @@ import { computed, nextTick, ref } from 'vue';
 import { NAlert, NButton, NCard, NEmpty, NInput, NSelect, NSpace, NSpin, NTag, useDialog, useMessage } from 'naive-ui';
 import { api } from '../api/index.js';
 import { describe, errorText } from '../api/errors.js';
-import { openConflictsFor } from '../supervision.js';
+import { acceptanceWarningsOf } from '../supervision.js';
 import { state } from '../state.js';
 import { useData } from '../useData.js';
 import { dateTime, eventEvidence, short } from '../format.js';
@@ -23,34 +23,42 @@ async function selectFromTree({ branchId, workId }) {
 }
 const correctionStateLabel = (state) => ({ 'not-retrieved': 'Not retrieved', retrieved: 'Retrieved · awaiting acknowledgment', acknowledged: 'Acknowledged' }[state] ?? state);
 const correctionStateType = (state) => state === 'acknowledged' ? 'success' : state === 'retrieved' ? 'warning' : 'default';
-async function disposition(work, decision, branchId, expectedMainRevision) {
+async function disposition(work, decision, branchId, expectedMainRevision, overrideConflicts = false) {
   busy.value = true;
   try {
-    await api.mergeWork(branchId, { workIds: [work.id], decision, expectedMainRevision });
-    message.success(decision === 'accepted' ? 'Work accepted into Main' : 'Work rejected');
+    await api.mergeWork(branchId, { workIds: [work.id], decision, expectedMainRevision, ...(overrideConflicts ? { overrideConflicts: true } : {}) });
+    message.success(decision === 'rejected' ? 'Work rejected' : overrideConflicts ? 'Work accepted into Main; your conflict override is recorded' : 'Work accepted into Main');
   } catch (e) {
     if (e?.code === 'STALE') {
       dialog.warning({ title: 'Main changed while you were reviewing', content: `${describe(e).hint} Nothing was accepted. Review the latest Main, then decide again.`, positiveText: 'Reload' });
+    } else if (e?.code === 'CONFLICT') {
+      // The Gateway saw unresolved conflicts this dialog did not show: never override them silently.
+      dialog.warning({ title: 'Conflict evidence changed', content: `${describe(e).hint} Nothing was accepted.`, positiveText: 'Review again' });
     } else message.error(errorText(e), { duration: 7000 });
   } finally { busy.value = false; await reload(); }
 }
-// Accepting and rejecting are both final for this proposal: confirm, and surface
-// open conflicts on the branch first (the Gateway does not check them on accept).
+// Accepting and rejecting are both final for this proposal. Confirm, show the Gateway's
+// acceptance warnings, and send overrideConflicts only for conflicts the person saw.
 function confirmDisposition(work, decision) {
   if (!current.value || !data.value) return;
-  const branchId = current.value.branch.id;
+  const branchId = work.branchId ?? current.value.branch.id;
   const expectedMainRevision = data.value.main.revision;
-  const open = openConflictsFor(data.value.conflicts, branchId);
+  const { unresolvedConflictIds, overlappingMainEntryIds } = acceptanceWarningsOf(work, data.value.conflicts);
+  const unresolved = unresolvedConflictIds.length;
+  const overlap = overlappingMainEntryIds.length;
   const accepting = decision === 'accepted';
-  const warning = open.length ? ` This branch has ${open.length} open conflict${open.length > 1 ? 's' : ''} (${open.map((c) => c.status).join(', ')}); review Conflicts before accepting.` : '';
-  dialog[accepting && open.length ? 'warning' : accepting ? 'info' : 'warning']({
-    title: accepting ? `Accept “${work.intent || 'this work'}” into Main?` : `Reject “${work.intent || 'this work'}”?`,
+  const notes = [
+    unresolved ? `It has ${unresolved} unresolved conflict${unresolved > 1 ? 's' : ''}; accepting records your explicit override in the audit log.` : '',
+    overlap ? `It may overlap ${overlap} current Main entr${overlap > 1 ? 'ies' : 'y'}; review Main afterwards for incompatible expectations.` : '',
+  ].filter(Boolean).join(' ');
+  dialog[accepting && !unresolved && !overlap ? 'info' : 'warning']({
+    title: accepting ? (unresolved ? 'Accept with unresolved conflicts?' : `Accept “${work.intent || 'this work'}” into Main?`) : `Reject “${work.intent || 'this work'}”?`,
     content: accepting
-      ? `It becomes a Main entry every agent receives (Main revision ${expectedMainRevision} → ${expectedMainRevision + 1}). You can roll Main back later, but the proposal stays accepted.${warning}`
+      ? `It becomes a Main entry every agent receives (Main revision ${expectedMainRevision} → ${expectedMainRevision + 1}). You can roll Main back later, but the proposal stays accepted.${notes ? ` ${notes}` : ''}`
       : 'The proposal is marked rejected and cannot be accepted later. The agent is not notified unless you also send a correction.',
-    positiveText: accepting ? (open.length ? 'Accept anyway' : 'Accept into Main') : 'Reject',
+    positiveText: accepting ? (unresolved ? 'Accept and record override' : 'Accept into Main') : 'Reject',
     negativeText: 'Cancel',
-    onPositiveClick: () => disposition(work, decision, branchId, expectedMainRevision),
+    onPositiveClick: () => disposition(work, decision, branchId, expectedMainRevision, accepting && unresolved > 0),
   });
 }
 async function sendCorrection() {
@@ -85,7 +93,11 @@ async function sendCorrection() {
         <p class="work-body">{{ work.body }}</p>
         <NSpace v-if="work.files?.length" size="small"><NTag v-for="f in work.files" :key="f.rootId + f.path" size="small" class="mono">{{ f.rootId }}:{{ f.path }}</NTag></NSpace>
         <p class="muted" style="font-size:11px">{{ dateTime(work.createdAt) }} · session {{ short(work.sessionId) }}</p>
-        <NSpace v-if="work.state === 'proposed'"><NButton type="primary" size="small" :disabled="busy" @click="confirmDisposition(work, 'accepted')">Accept into Main</NButton><NButton type="error" secondary size="small" :disabled="busy" @click="confirmDisposition(work, 'rejected')">Reject</NButton></NSpace>
+        <template v-if="work.state === 'proposed'">
+          <NAlert v-if="acceptanceWarningsOf(work, data.conflicts).unresolvedConflictIds.length" type="warning" style="margin-bottom:8px">{{ acceptanceWarningsOf(work, data.conflicts).unresolvedConflictIds.length }} unresolved conflict(s) involve this work. Accepting requires your explicit override; review Conflicts first.</NAlert>
+          <NAlert v-if="acceptanceWarningsOf(work, data.conflicts).overlappingMainEntryIds.length" type="warning" style="margin-bottom:8px">This conclusion may overlap {{ acceptanceWarningsOf(work, data.conflicts).overlappingMainEntryIds.length }} current Main entry/entries. Review Main for incompatible expectations after acceptance.</NAlert>
+          <NSpace><NButton type="primary" size="small" :disabled="busy" @click="confirmDisposition(work, 'accepted')">Accept into Main</NButton><NButton type="error" secondary size="small" :disabled="busy" @click="confirmDisposition(work, 'rejected')">Reject</NButton></NSpace>
+        </template>
       </NCard>
       <NCard title="Corrections to this branch" size="small" style="margin-top:16px">
         <p class="muted" style="font-size:12px">Corrections are durable guidance. Managed runners try to surface new items through the runtime; acknowledgment means the agent confirmed retrieval, not that it complied.</p>
