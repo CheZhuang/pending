@@ -47,6 +47,10 @@ export interface BranchWork {
     id: string; workspaceId: string; branchId: string; sessionId: string;
     body: string; intent?: string; files: FileRef[]; eventIds: string[]; conflictsWithMain: string[];
     state: 'proposed' | 'accepted' | 'rejected'; createdAt: string;
+    /** Session evidence captured at proposal time; settlement closes this observation window. */
+    observationThroughSequence?: number;
+    /** Current read-model warnings, never persisted on the proposal. */
+    acceptanceWarnings?: AcceptanceWarnings;
 }
 export const mainInputSchema = z.object({ body: z.string().trim().min(1), files: z.array(fileRefSchema).default([]) });
 export type MainInput = z.input<typeof mainInputSchema>;
@@ -77,10 +81,12 @@ export interface ConflictFileEvidence {
     recentChanges: Array<{ commit: string; date: string; subject: string }>;
     gitError?: string;
 }
+export interface AcceptanceWarnings { unresolvedConflictIds: string[]; overlappingMainEntryIds: string[]; }
 /** Human acceptance of work records into Main; never a Git/source-code merge. */
 export interface Merge {
     id: string; workspaceId: string; sourceBranchId: string; workIds: string[];
     state: 'accepted' | 'rejected'; mainRevision: number; actor: Actor; createdAt: string;
+    warnings?: AcceptanceWarnings; overrideConflicts?: boolean;
 }
 export interface Correction {
     id: string; workspaceId: string; branchId: string; body: string;
