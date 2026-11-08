@@ -1,7 +1,8 @@
-import { constants, closeSync, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { createWindowsCapability, readWindowsCapability } from './windows-file-security.js';
 
 export function localDatabasePath(): string {
   return join(process.env.AGENTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree'), 'gateway.sqlite');
@@ -15,20 +16,35 @@ export function readLocalHumanToken(databasePath = localDatabasePath()): string 
 }
 
 function readToken(databasePath: string): string {
-  const fd = openSync(`${databasePath}.human-token`, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const path = `${databasePath}.human-token`;
+  // O_NOFOLLOW is not available on Windows; explicitly reject links there too.
+  if (!lstatSync(path).isFile()) throw new Error('Gateway human capability must be an owner-only regular file');
+  if (process.platform === 'win32') return validToken(readWindowsCapability(path));
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()))
       throw new Error('Gateway human capability must be an owner-only regular file');
-    const token = readFileSync(fd, 'utf8');
-    if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid local human capability file');
-    return token;
+    return validToken(readFileSync(fd, 'utf8'));
   } finally { closeSync(fd); }
 }
 
+function validToken(token: string): string {
+  if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid local human capability file');
+  return token;
+}
+
 export function ensureLocalHumanToken(databasePath: string): string {
+  if (process.platform === 'win32') {
+    try { lstatSync(`${databasePath}.human-token`); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      createWindowsCapability(`${databasePath}.human-token`,randomBytes(32).toString('hex'));
+    }
+    return readToken(databasePath);
+  }
   let fd: number;
-  try { fd = openSync(`${databasePath}.human-token`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+  try { fd = openSync(`${databasePath}.human-token`, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return readToken(databasePath); throw error; }
   try { writeFileSync(fd, randomBytes(32).toString('hex')); }
   finally { closeSync(fd); }
