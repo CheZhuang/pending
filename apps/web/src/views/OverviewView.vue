@@ -1,4 +1,4 @@
-<!-- Overview: local coding agents. Managed sessions (with the controls Agentree really
+<!-- Overview: local coding agents. Managed sessions (with the controls PendingTree really
      has for them) and processes the Gateway merely discovered on this computer.
      Works without a selected workspace; discovery is computer-wide. -->
 <script setup>
@@ -52,7 +52,7 @@ async function rescan() {
 function stop(row) {
   dialog.warning({
     title: `Stop ${row.title}?`,
-    content: 'Agentree asks the launcher to terminate this managed session. Pending approvals are denied and unfinished tasks end without a native outcome. This cannot be undone.',
+    content: 'PendingTree asks the launcher to terminate this managed session. Pending approvals are denied and unfinished tasks end without a native outcome. This cannot be undone.',
     positiveText: 'Stop session', negativeText: 'Cancel',
     onPositiveClick: async () => {
       try {
@@ -112,7 +112,7 @@ const unmanagedColumns = [
       <NAlert v-if="data.sessionsError" type="error" class="notice" :title="describe(data.sessionsError).title">Managed sessions could not be loaded. {{ describe(data.sessionsError).hint }}</NAlert>
 
       <h2 class="section">Managed sessions <span class="muted count">{{ rows.managed.length }}</span></h2>
-      <NEmpty v-if="!rows.managed.length" class="empty" description="No managed session is running. Start Claude Code or Codex through an Agentree launcher to supervise it." />
+      <NEmpty v-if="!rows.managed.length" class="empty" description="No managed session is running. Start Claude Code or Codex through a PendingTree launcher to supervise it." />
       <div class="agent-list">
         <NCard v-for="row in rows.managed" :key="row.key" size="small">
           <div class="agent-head">
@@ -122,7 +122,7 @@ const unmanagedColumns = [
               <div v-if="!row.process && row.reportedProcess" class="meta">Launcher reported PID {{ row.reportedProcess.pid }}</div>
             </div>
             <div class="tags">
-              <NTag size="small" type="info" :bordered="false">Agentree managed</NTag>
+              <NTag size="small" type="info" :bordered="false">PendingTree managed</NTag>
               <NTag size="small" :type="lifecycle(row.session)" :bordered="false">{{ row.session.state }}</NTag>
             </div>
           </div>
@@ -132,7 +132,7 @@ const unmanagedColumns = [
             <div><span class="label">Process exit</span><span>{{ row.session.processStatus === 'exit-reported' ? 'Exit reported by launcher' : 'No exit reported' }}</span></div>
           </div>
           <div class="capabilities">
-            <span class="label">Through Agentree</span>
+            <span class="label">Through PendingTree</span>
             <NTooltip v-for="[name, cap] in capabilityList(row)" :key="name">
               <template #trigger><NTag size="small" :type="cap.available ? 'success' : 'default'" :bordered="false">{{ cap.available ? '✓' : '✕' }} {{ name }}</NTag></template>
               {{ cap.note }}
@@ -150,7 +150,7 @@ const unmanagedColumns = [
       </div>
 
       <h2 class="section">Discovered, not managed <span class="muted count">{{ rows.unmanaged.length }}</span></h2>
-      <p class="muted note">Found in the OS process list by name or path. Agentree cannot dispatch tasks to, review approvals for, or stop these processes, and does not observe their activity.</p>
+      <p class="muted note">Found in the OS process list by name or path. PendingTree cannot dispatch tasks to, review approvals for, or stop these processes, and does not observe their activity.</p>
       <NCard size="small">
         <NDataTable :columns="unmanagedColumns" :data="rows.unmanaged" :row-key="(r) => r.key" size="small" :bordered="false" :scroll-x="820">
           <template #empty><NEmpty size="small" :description="inventory?.status === 'ok' ? 'No other Claude Code or Codex processes found.' : 'No process inventory available.'" /></template>

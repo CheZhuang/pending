@@ -89,7 +89,7 @@ test('API errors keep the Gateway code and always produce readable text', async 
   globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
   await assert.rejects(() => live.processes(), (e) => e.code === 'NETWORK' && /not reachable/.test(errorText(e)));
   respond(401, {});
-  await assert.rejects(() => live.workspaces(), (e) => e.code === 'HTTP_401' && /Open Agentree from the local CLI/.test(errorText(e)));
+  await assert.rejects(() => live.workspaces(), (e) => e.code === 'HTTP_401' && /Open PendingTree from the local CLI/.test(errorText(e)));
 });
 
 test('restore on an older Gateway is reported as unsupported; real errors pass through with details', async () => {

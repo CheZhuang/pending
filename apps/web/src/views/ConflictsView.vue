@@ -78,7 +78,7 @@ async function report() {
         <details v-if="evidence.workingTreeDiff"><summary>Current working tree diff</summary><pre class="git-diff">{{ evidence.workingTreeDiff }}</pre></details>
         <p v-else-if="!evidence.gitError" class="muted">No uncommitted diff for this file.</p>
       </NCard>
-      <p v-if="conflict.fileEvidence?.length" class="muted" style="font-size:11px">This evidence describes the current shared checkout; it is not attributed to a logical Agentree branch or agent.</p>
+      <p v-if="conflict.fileEvidence?.length" class="muted" style="font-size:11px">This evidence describes the current shared checkout; it is not attributed to a logical PendingTree branch or agent.</p>
       <p class="muted" style="font-size:12px">{{ conflict.branchIds?.length ?? 0 }} affected branch(es) · {{ conflict.evidenceIds?.length ?? 0 }} evidence item(s) <template v-if="conflict.updatedAt">· {{ dateTime(conflict.updatedAt) }}</template></p>
       <template v-if="['potential','confirmed'].includes(conflict.status)">
         <NInput v-model:value="explanations[conflict.id]" size="small" placeholder="Your assessment is required for this decision" style="margin-bottom:8px" />

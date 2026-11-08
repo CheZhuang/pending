@@ -56,7 +56,7 @@ onMounted(boot);
     >
       <div class="brand">
         <img src="/favicon.svg" alt="" width="26" height="26" />
-        <span>Agentree</span>
+        <span>PendingTree</span>
       </div>
       <NMenu :value="route.meta.menu ?? route.name" :options="menu" />
       <div v-if="!collapsed" class="sider-foot muted">
