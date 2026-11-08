@@ -1,257 +1,42 @@
-# Runbook: Agentree with real agents
+# Real-agent checks
 
-How to run Agentree with a **real Claude Code** session: watch its traffic live, approve or block
-tool calls before they run, and stop it. This is also the **A10 Agent Harness demo**:
+Use [native setup](../docs/NATIVE_AGENTS.md) for launcher commands and supported controls. Live runs require locally installed, authenticated runtimes and may use model credits. Deterministic coverage is available through [the two-agent demo](README.md).
 
-> launch a CLI agent → show its traffic live → block a disallowed operation → terminate the run.
+## Claude supervision rehearsal
 
-Everything below was rehearsed against the real gateway, launcher and hook. The `claude` binary was
-replaced by a stand-in that sends real `PreToolUse` payloads, so the steps match exactly except for
-Claude's own UI.
+1. Build the backend and start the Gateway and live Console as described in the [quick start](../README.md#quick-start).
+2. Launch `demo/managed-claude.mjs` from a scratch project using the command in native setup. It registers a workspace, branch, and session automatically.
+3. Ask Claude to read one file, propose a small change through `work_propose`, and retrieve Main using `context_sync`.
+4. Review pending tool calls on **Approvals**. Approve or deny with a reason, and inspect the corresponding records on **Activity**.
+5. Inspect the proposal on **Branches**, send a correction, and accept or reject the work. Inspect the resulting **Main** and history.
+6. Request **Stop** on **Overview** and inspect the session's lifecycle report. A stop request and a reported process exit are distinct evidence.
 
-## What works with real runtimes today
+Every controlled call requires a decision before the approval deadline. Keep the task small. Approval records alone do not prove execution or correctness.
 
-Updated after B's PR #16 (`docs/NATIVE_AGENTS.md` has the full enforcement matrix):
+## Isolated native smoke checks
 
-| Capability | Claude Code | Codex |
-| --- | --- | --- |
-| Joins a workspace as a governed session | ✅ `demo/managed-claude.mjs` (B's launcher) | ✅ `ManagedCodex` (B) |
-| Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ⚠️ only command-execution, file-change and Agentree MCP approval callbacks; no general interception |
-| Live traffic in the console and CLI | ✅ pre- and post-tool records | ✅ App Server notifications (journalled) |
-| Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ✅ Stop revokes the session; the managed thread closes |
-| Publish and sync context, merges (Agentree MCP) | ✅ session-bound MCP configured by the launcher | ✅ session-bound MCP configured by `ManagedCodex` |
-
-**The main demo, Claude Code and Codex working together, is `npm run demo:real`** (section 9). Steps 1–8
-below cover a single governed Claude session, which is the A10 harness part. `npm run demo` remains the
-deterministic fallback with simulated agents.
-
-**Not verified yet:** a real Claude Code run with Agentree MCP (B's Codex smoke passed; the Claude smoke
-`npm run smoke:native -- claude` still needs a machine with Claude Code), and `npm run demo:real` end to end.
-| Joins a workspace as a governed session | ✅ `demo/managed-claude.mjs` (B's launcher) | ❌ no launcher host yet |
-| Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ❌ approvals not routed (adapter declines them) |
-| Live traffic in the console and CLI | ✅ one record per tool call (policy, pending, decision) | ❌ until a host pushes App Server events |
-| Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ❌ |
-| Retrieve Main / corrections and propose branch work (MCP tools) | ✅ session-bound host is configured | ✅ session-bound host is configured |
-
-For the **supervision loop** (Main, proposed work, explicit conflict evidence and human correction) use
-`npm run demo`. It runs the same sync, MCP, gateway and CLI code with two simulated agents (see `README.md`).
-The gaps above and who owns them are listed at the end.
-
----
-
-## 0. One-time setup
-
-1. **Node 24+** for the repo (the gateway uses `node:sqlite`). Check with `node -v`; with nvm: `nvm install 24 && nvm use 24`.
-2. **Claude Code**, installed and logged in. Run it once on its own so it is authenticated:
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-   ```bash
-   claude
-   ```
-3. **Build the repo and install the console:**
-   ```bash
-   npm ci && npm run build
-   ```
-   ```bash
-   npm --prefix apps/web install
-   ```
-4. **A scratch project for Claude to work in.** Not the Agentree repo: Agentree writes nothing into it, but
-   Claude will.
-   ```bash
-   mkdir -p ~/agentree-playground && cd ~/agentree-playground && git init && echo "# Playground" > README.md
-   ```
-
-**Rehearsal tip:** to start from a clean state each time, run `export GATEWAY_DATA_DIR=$(mktemp -d)` once and
-then use that same shell value in *every* terminal below. Without it, all state lives in `~/.local/share/agentree`.
-
-## 1. Start the gateway (terminal 1, repo root)
-
-```bash
-npm start
+```sh
+npm run smoke:native -- claude
+npm run smoke:native -- codex
 ```
 
-Expected: `Gateway listening on http://127.0.0.1:8787; admin credential: …/admin-token`. Leave it running.
+Each command starts a temporary Gateway and prints an evidence path. Both check session binding, native observation, and a real MCP work proposal. The Codex smoke also submits a task through the dispatch API and waits for matching terminal native evidence. No preexisting Gateway is needed.
 
-## 2. Open the console (terminal 2)
+The smoke approval helper allows Agentree MCP calls and literal reads of its synthetic fixture; other requested tools are denied. Save the printed evidence when reporting results. Fixture-based tests do not establish that these live checks passed on your machine.
 
-```bash
-npm --prefix apps/web run dev:live
+## Real two-agent demo
+
+Start the Gateway and live Console, then choose a model available to your authenticated Codex runtime:
+
+```sh
+CODEX_MODEL=<model> npm run demo:real -- --check
+CODEX_MODEL=<model> npm run demo:real
 ```
 
-Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`, otherwise the pairing cookie is refused.
-Paste the admin token when asked:
+Preflight checks dependencies and seeds the playground without model calls. The full run writes Main expectations, dispatches Codex work, launches Claude with a task, and waits for human conflict assessment, acceptance, and correction in the Console. A follow-up Codex task retrieves the correction and updated Main; the final step requests a human Stop.
 
-```bash
-cat ~/.local/share/agentree/admin-token
-```
+Use Approvals for supported tool decisions, Branches for acceptance/corrections, Conflicts for assessment, Tasks for delivery evidence, and Main history for revision inspection and restoration.
 
-It shows "No workspace yet" until step 3. Reload the page after Claude starts.
+`CODEX_MODEL` is required. Claude defaults to `haiku` (override with `CLAUDE_MODEL`). The playground defaults to `~/agentree-two-agents` (override with `PLAYGROUND`). The helper approves Agentree MCP calls automatically; use `--manual` to review those too. Other controlled calls wait for human review. Live model behavior remains unverified by deterministic tests.
 
-## 3. Launch Claude Code under the gateway (terminal 3)
-
-```bash
-cd ~/agentree-playground
-```
-
-```bash
-node /path/to/pending/demo/managed-claude.mjs --label "Claude A"
-```
-
-What happens:
-- The gateway creates a workspace rooted at `~/agentree-playground`, a logical branch `Claude A` and a session.
-- Claude starts with a temporary `--settings` file that adds the Agentree `PreToolUse` hook for this run only.
-  Your Claude settings and the project are not modified.
-- The admin token is removed from Claude's environment. Claude only gets its own session token.
-
-Reload the console. **Overview** now shows the session as `active`.
-
-Extra arguments go after `--` and are passed to `claude` (for example `-- --model sonnet`).
-
-## 4. Give Claude a small task, and govern it
-
-Suggested prompt (it triggers a few safe tool calls and one you will block):
-
-> Read README.md, add a line "hello from Claude" to it, then run `git push --force`.
-
-For **every** tool call (Read, Edit, Bash, …):
-- **Approvals** shows the call with a **60-second countdown**. Claude waits.
-- Click **Allow** and Claude continues. Click **Deny** (optionally with a reason) and Claude receives
-  `[Harness] Blocked by Gateway: <reason>` and does not run the tool.
-- No decision within 60 s counts as **deny** (`timeout`).
-- **Activity** shows each call live: `policy.decision → REQUIRE-APPROVAL`, `tool.pending`, `tool.decided`,
-  `tool.execution-decision`.
-
-Block the `git push --force`. That is the "block a disallowed operation" step.
-
-> In this MVP the gateway asks a human about every tool call, Read included, so keep the task small.
-> An approval is a decision sent to the hook, not proof that the tool ran.
-
-## 5. Stop the run
-
-**Overview → Stop** on the session, then confirm. Terminal 3 prints a red `已被管理员终止` ("stopped by the
-administrator") and Claude exits. The session becomes `ended` with process status `exit-reported` (signal
-`SIGTERM`), and any pending approvals of that session are denied.
-
-## 6. The same story from the CLI
-
-All three tools share the gateway's database:
-
-```bash
-npm run agentree -- status
-```
-
-```bash
-npm run agentree -- log --audit
-```
-
-The log reads like this (from the rehearsal):
-
-```
-#8   policy.decision          agent:0ea0a354 controlled.execute → REQUIRE-APPROVAL (Human approval required)
-#9   tool.pending             Bash npm test · waiting for a human
-#10  tool.decided             approval 9bfa54f3 → approved by local-admin
-#11  tool.execution-decision  hook told ALLOW for approval 9bfa54f3
-#13  tool.pending             Bash git push --force · waiting for a human
-#14  tool.decided             approval 4049c095 → denied (Force-push needs a human) by local-admin
-#15  tool.execution-decision  hook told DENY for approval 4049c095
-#16  session.kill-requested   stop requested by a human
-#17  session.exited           process exited by SIGTERM
-```
-
-## 7. Two real sessions at once
-
-Run step 3 again in another terminal from the same directory with a different label
-(`--label "Claude B"`). The gateway reuses the workspace (same root) and creates a second branch, so two
-independent, governed Claude Code sessions appear side by side in Overview, Activity and the branch tree.
-
-## 8. Judge demo, about 3 minutes
-
-1. Console Overview, then terminal 3 launches Claude → the session appears.
-2. Give the prompt from step 4. Allow the Read and the Edit; the Activity page fills up live.
-3. **Deny** `git push --force` with a reason → Claude reports it was blocked.
-4. **Stop** → the session ends, and the terminal shows the termination.
-5. `npm run agentree -- log --audit`: the auditable record of every decision.
-6. Then the multi-agent part: `npm run demo:real` (section 9) with Claude Code and Codex together, shown on the
-   console's **Tasks**, **Conflicts**, **Branches** and **Main history** pages. Fallback: `npm run demo` with simulated agents.
-6. Then `npm run demo` for the multi-agent part: current Main, branch proposals,
-   the conflict signal, and a human acceptance/correction.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
-| --- | --- |
-| `npm start` fails on `node:sqlite` | Node < 24. Switch to Node 24. |
-| Console: `DENY · Console origin is not allowed` | Open `http://localhost:5173` (not 127.0.0.1), or add your origin to `GATEWAY_CONSOLE_ORIGINS`. |
-| `No admin token` from `managed-claude.mjs` | Gateway not started yet, or it uses a different `GATEWAY_DATA_DIR` than this terminal. |
-| `Build the repository first` | Run `npm run build` in the repo (the launcher runs from `dist/`). |
-| Claude runs tools without asking | It was started as plain `claude`. Only sessions launched through `managed-claude.mjs` are governed. |
-| Every tool call is denied immediately | The hook cannot reach the gateway, so it denies by default. Check terminal 1. (`HARNESS_FAIL_OPEN=1` is for development only.) |
-| `Gateway event stream failed; stopping managed session` | The gateway stopped. The launcher stops Claude rather than run ungoverned. |
-| CLI or console shows an empty workspace | They use a different data directory. Use the same `GATEWAY_DATA_DIR` everywhere. |
-
-## 9. Claude Code and Codex together (the main demo)
-
-`demo/real-two-agents.ts` runs the supervision story with real runtimes on the running gateway, so every step
-appears live in the console. The script plays the human only where noted; everything else is you in the console.
-
-1. **Codex** joins as a managed session on branch `Codex` (owns `src/api`); its runner starts polling for tasks.
-2. **The human writes Main** (by the script): two expectations, each referencing a file.
-3. **The human dispatches a task to Codex** through `POST /v1/tasks` (the same route as the console's **Tasks**
-   page) with Main attached. Codex edits `src/api/users.ts` and calls `work_propose`. Its file-change approvals
-   wait for you in **Approvals**; the task status moves only on native turn evidence.
-4. **Claude** joins on branch `Claude` (owns `src/auth`): reads Main with `context_get`, edits
-   `src/auth/token.ts`, calls `work_propose`, then tries `git push --force`, which **you deny** in **Approvals**.
-5. **You supervise**: judge the potential conflicts (file evidence) in **Conflicts**, accept Claude's work into
-   Main in **Branches**, and send Codex a correction. The script waits for each step and tells you what to do.
-6. **A follow-up task** asks Codex to `context_sync` and `context_acknowledge`, then report the correction and
-   the current Main rule: the correction and the updated Main reached the agent.
-7. **You** press **Stop** on the Codex session (terminate the run). Afterwards, **Main history** shows every
-   revision and can roll Main back.
-
-**Token cost is kept minimal on purpose:**
-- Claude runs on `haiku` (override with `CLAUDE_MODEL`) with `--max-turns 12` and `--strict-mcp-config`, so only
-  the Agentree MCP server is loaded.
-- Codex **refuses to start unless `CODEX_MODEL` is set explicitly**, so it can never fall back to the default
-  model. Set it to the cheapest model your Codex offers (see the model picker in `codex`). Reasoning effort is
-  forced to `low`, and your other MCP servers are not loaded.
-- The project is three tiny files, and every prompt says not to explore or edit other files.
-
-The script auto-approves only **Agentree MCP** tool calls (collaboration plumbing). Every other tool call
-(Bash, Read, Edit, Codex commands) waits for you in the console. Use `--manual` to approve the MCP calls by
-hand as well.
-
-```bash
-npm start                                    # terminal 1
-```
-
-```bash
-npm --prefix apps/web run dev:live           # terminal 2, open http://localhost:5173
-```
-
-```bash
-CODEX_MODEL=<cheapest model> npm run demo:real -- --check    # terminal 3: preflight, no model calls
-```
-
-```bash
-CODEX_MODEL=<cheapest model> npm run demo:real
-```
-
-`--check` verifies Node 24, the gateway, the admin token, the `claude` and `codex` commands and `CODEX_MODEL`,
-and seeds the project (default `~/agentree-two-agents`, override with `PLAYGROUND`), without sending
-anything to a model.
-
-The real models may not follow the prompts exactly. Rehearse once, record the successful run as a backup
-video, and keep `npm run demo` as the fallback.
-## Known limits (current backend)
-
-- **Task dispatch reaches managed Codex only.** Claude Code CLI sessions cannot receive unsolicited tasks; a task
-  to them is recorded as `delivery-unavailable`. Claude gets its work from the prompt it is launched with.
-- **Codex interception is partial.** Command-execution, file-change and Agentree MCP approval callbacks go through
-  the gateway; other Codex tools are observed, not intercepted.
-- **Task status needs native evidence.** `running` / `completed` / `failed` come from native turn events; an
-  interrupted task ends as `failed`, and `outcome-unknown` is never retried automatically.
-- **Corrections are pulled, not pushed.** An agent sees a correction when it calls `context_get` / `context_sync`
-  (the follow-up task in section 9 asks it to); nothing is injected into a running turn.
+See [verification](../docs/SUPERVISION_VERIFICATION.md) for validation scope.

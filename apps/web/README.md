@@ -1,72 +1,41 @@
-# Agentree Web Console
+# Web Console
 
-The console is a human supervision surface for the local Gateway. It is built with Vue 3, Vite, Naive UI, and Vue Router.
+The Console is the human supervision UI, built with Vue 3, Vite, Naive UI, and Vue Router. Use Node.js 24+ for a consistent runtime with the backend.
 
-| Page | What it shows |
+| Page | Purpose |
 | --- | --- |
-| **Overview** | Logical branches, native sessions, lifecycle state, stop requests, and adapter-declared capabilities |
-| **Main** | The shared human-maintained reference: create, edit (with a change preview), remove and restore entries; file references, revision and provenance; per-entry version history with single-version restore |
-| **Main history** (`/main/history`) | Global Main revisions, a Gateway-built preview of Main at any revision compared with the current Main, and whole-snapshot or single-entry restore with a confirmation listing exactly what will be reversed |
-| **Tasks** | Send an instruction (plus optional context and a Main snapshot) to one managed agent session; status from Gateway task records and native turn evidence; supported cancellation; link to the agent's activity |
-| **Branches** | Agent work proposals, reported file references, recent session activity, direct acceptance or rejection, and corrections |
-| **Conflicts** | Potential and confirmed conflict evidence, human reports, and explained confirm, resolve, or dismiss decisions |
-| **Activity** | Live events from history and SSE, with observed telemetry, runtime-reported results, intercepted decisions, and Gateway records distinguished |
-| **Approvals** | Pending controlled tool approvals and their terminal outcomes |
+| Overview | Branches, native sessions, runtime capabilities, and stop requests |
+| Main | Shared reference editing, change previews, removal, entry restoration, provenance, and history |
+| Main history | Global revisions, historical comparisons, and whole-Main or entry restoration |
+| Tasks | Submit instructions with optional Main context, inspect native delivery evidence, and request cancellation |
+| Branches | Proposals, file evidence, recent activity, acceptance/rejection, and corrections |
+| Conflicts | Evidence, human reports, and explained conflict assessments |
+| Activity | Event history and SSE, including observation and approval records |
+| Approvals | Pending controlled tool calls and their outcomes |
 
-Main is text guidance for agents. File references are evidence and labels; the Console does not edit source files or perform Git operations. Branches are logical work records, not Git branches. File overlap starts as potential evidence and does not itself establish incompatibility. Runtime-reported completion is not independent proof of correctness, and an intercepted tool decision is not proof the tool ran.
+## Run
 
-## Run it
+From the repository root:
 
-Use Node 20.19+ or 22.12+ for the Console (the Gateway itself needs Node 24).
-
-```bash
-cd apps/web
-npm install
-npm run dev            # http://localhost:5173, mock data
+```sh
+npm ci --prefix apps/web
+npm --prefix apps/web run dev          # standalone mock preview
+# or
+npm --prefix apps/web run dev:live     # running local Gateway required
 ```
 
-## Mock mode
+Open `http://localhost:5173/?api=mock` or `http://localhost:5173/?api=live` to select the mode explicitly. Otherwise selection uses the saved mode before the Vite mode, then defaults to mock. Mock records reset on reload.
 
-Mock mode mirrors the supervision records and API: Main entries, global revisions, previews and restores (docs/MAIN_API.md), proposed branch work, conflicts, corrections, merges, session activity, tool approvals, and task dispatch (docs/TASK_DISPATCH_API.md): a managed Codex session that moves a task through native turn evidence, and a Claude Code session that cannot receive tasks. Changes reset when the page reloads.
+For live setup, follow the [root quick start](../../README.md#quick-start). Pair once using the admin token. The page does not persist that token; subsequent REST and SSE requests use the HttpOnly cookie. The default Gateway URL is `http://localhost:8787`. Set `VITE_GATEWAY_URL` when starting Vite or building to change it, and allow the Console origin in the Gateway configuration. Keep the Console and Gateway hostnames consistent for browser cookies.
 
-`npm test` runs the UI behavior tests without a browser: the rollback comparison, task status rules, realistic mock workflows (edit Main, restore an entry and a whole revision, stale and unknown revisions, submit a task and follow its native evidence, unavailable agents, interruption, stopped sessions), and the live client against an older Gateway.
+## Verify and build
 
-## Live mode
-
-```bash
-# terminal 1, repository root, Node 24+
-npm ci && npm run build && npm start
+```sh
+npm --prefix apps/web test
+npm --prefix apps/web run build
+npm --prefix apps/web run preview
 ```
 
-```bash
-# terminal 2
-cd apps/web && npm run dev:live
-```
+`src/api/live.js` and `src/api/mock.js` provide the view-facing API. Gateway responses determine write success and revision checks; errors remain visible to the human. Main history and task dispatch use the [HTTP contracts](../../docs/GATEWAY_API.md). Historical previews are checked against the requested revision; older Gateways show an unsupported error. Task delivery is available only for connected managed Codex runners.
 
-The Console asks for the admin token once and pairs it through `POST /v1/console/login`. The token is never stored by the page; REST and SSE use the HttpOnly cookie. Open the Console on **localhost** to match the Gateway's default allowed origin. Change the Gateway URL with `VITE_GATEWAY_URL`.
-
-## Build
-
-```bash
-npm run build && npm run preview
-```
-
-The live API adapter is in `src/api/live.js`; the in-browser implementation is in `src/api/mock.js`. Both expose the same methods. The Gateway is authoritative for writes and revision checks. The Console displays server errors instead of treating a local decision as successful.
-
-## Integration checklist
-
-The Console talks only to these Gateway routes. Check each one when the backend changes.
-
-| Area | Routes | Verify |
-| --- | --- | --- |
-| Main edit | `POST /v1/workspaces/:w/main`, `POST …/main/:entry`, `POST …/main/:entry/remove` | Edit with an old revision returns `409 STALE` with `details.{expectedRevision,currentRevision}`; the Console shows the reload dialog and writes nothing |
-| Main history | `GET …/main/history`, `GET …/main/:entry/history`, `GET …/main/preview?revision=R` | History is an array; a preview's `revision` equals `R`. If not (a Gateway without PR #20), the Console shows **UNSUPPORTED** instead of a wrong preview |
-| Restore | `POST …/main/restore`, `POST …/main/:entry/restore` with `{revision, expectedRevision}` | A restore is exactly one new revision with `restoredFromRevision`; restored versions carry `restoredFrom`; the Console never builds history locally |
-| Tasks | `POST /v1/tasks` (with a client `requestId`), `GET /v1/tasks`, `POST /v1/tasks/:id/cancel` | Retrying with the same `requestId` returns the same task; a Claude Code session gives `delivery-unavailable` with a reason; sessions report `taskDispatch.available` |
-| Evidence | SSE `/v1/stream` | `task.*` records carry `{taskId, status, nativeTurnId, reason}`; native `turn/started` / `turn/completed` carry the same turn id, so the task drawer can pair them |
-
-Known backend limits shown in the UI rather than worked around:
-- Only a managed Codex App Server session with a polling runner receives tasks. Claude Code CLI sessions cannot accept unsolicited tasks (`delivery-unavailable`).
-- `running`, `completed` and `failed` depend on native turn events; `outcome-unknown` is final and never retried automatically.
-- Cancelling an accepted task asks Codex to interrupt; the result arrives as native evidence (usually `failed` with the native status), not as `cancelled`.
-- There is no route to list tasks per workspace; the Console filters `GET /v1/tasks` by the workspace's sessions.
+See [architecture](../../docs/ARCHITECTURE.md) for supervision rules and [verification](../../docs/SUPERVISION_VERIFICATION.md) for test coverage.

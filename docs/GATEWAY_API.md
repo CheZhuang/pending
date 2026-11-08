@@ -2,7 +2,7 @@
 
 Run the local daemon with Node.js 24+. Keep the generated admin credential local. Native sessions use their own session bearer credential; the Console pairs using the admin token and receives an HttpOnly cookie. Allowed Console origins and the existing write-origin check remain enforced. HTTP input never selects a Core actor.
 
-See [Main editing, history and rollback](MAIN_API.md) for the complete Main contract and examples.
+See [Main editing, history and restoration](MAIN_API.md) for the complete Main contract, and [task dispatch](TASK_DISPATCH_API.md) for explicit native task submission. The [quick start](../README.md#quick-start) documents startup and configuration. [fixtures/gateway.http](../fixtures/gateway.http) contains manual HTTP requests.
 
 ## Supervision API
 
@@ -10,10 +10,15 @@ All paths below are under `/v1`. Human writes require an admin bearer or paired 
 
 | Method and path | Behavior |
 | --- | --- |
-| GET `/workspaces/:id/main` | `{workspaceId,revision,entries}` current human-governed reference |
+| GET `/workspaces/:id/main` | `{workspaceId,revision,entries,removedEntries}` current human-governed reference |
 | POST `/workspaces/:id/main` | Human creates `{body,files?,expectedRevision}` |
 | POST `/workspaces/:id/main/:entryId` | Human edits `{body,files?,expectedRevision,remove?}`; removal retains history |
-| GET `/workspaces/:id/main/:entryId/history` | Every retained revision, including removal |
+| GET `/workspaces/:id/main/:entryId/history` | Every retained entry revision, including removal/restoration |
+| GET `/workspaces/:id/main/history` | Global Main revision records |
+| GET `/workspaces/:id/main/preview?revision=R` | Historical snapshot |
+| POST `/workspaces/:id/main/:entryId/remove` | Human `{expectedRevision}` removal |
+| POST `/workspaces/:id/main/restore` | Human `{revision,expectedRevision}` whole-Main restoration |
+| POST `/workspaces/:id/main/:entryId/restore` | Human `{revision,expectedRevision}` entry restoration |
 | GET `/workspaces/:id/supervision` | Main, branch/session/work/activity/file summaries, conflicts and corrections |
 | GET `/branches/:id/work` | Branch overview, sessions, work, affected files, recent activity and corrections |
 | POST `/branches/:id/work` | Authenticated agent submits `{body,files?,intent?,eventIds?,conflictsWithMain?}` |
@@ -43,4 +48,6 @@ Text-only Main edits retain file references; pass `files:[]` to clear them. Main
 - `POST /decide` is the native pre-execution tool approval boundary; `GET /approvals` and `POST /approvals/:id` serve human review with `{decision:"approved"|"denied",reason?}`. Timeouts and ended sessions deny execution. Approval does not imply native success.
 - `POST /console/login` requires the admin bearer and allowed Origin. `POST /console/logout` clears the paired browser cookie.
 
-The previous `/branches/:id/context`, `/merges`, `/merges/:id/apply` and `/reviews` governance routes are removed. Update clients to the supervision API; old immutable records remain archival migration evidence.
+Human task routes are `POST|GET /tasks`, `GET /tasks/:id`, and `POST /tasks/:id/cancel`; session-bound runner routes are listed in the [task dispatch contract](TASK_DISPATCH_API.md).
+
+See [migration](MIGRATION.md) for retired context/merge-request/review routes and retained historical records.

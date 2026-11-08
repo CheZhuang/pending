@@ -1,33 +1,33 @@
 # Native agent integration
 
-Use Node.js 24 or newer and run `npm ci && npm run build && npm start` from the repository root. Gateway listens on `127.0.0.1:8787` and creates its database and admin token in `~/.local/share/agentree/` unless `GATEWAY_DATA_DIR` is set. Keep that directory private. The launchers use the admin token only to register a native session; child processes receive a session credential instead.
+Follow the [quick start](../README.md#quick-start) to build and start the Gateway and Console with Node.js 24+. Install and authenticate each native runtime locally before launching it. Launchers register a session with the admin credential and configure Agentree MCP with a session credential. Keep credentials and native registration files private. Native MCP processes need access to the same local Gateway database.
 
 ## Claude Code
 
-Install and authenticate Claude Code on the machine that runs it. In another terminal, from the repository root:
+After building, run the wrapper from the project you want Claude to work in. Replace `/absolute/path/to/agentree` with this repository's path:
 
 ```sh
-export HARNESS_ADMIN_TOKEN="$(cat ~/.local/share/agentree/admin-token)"
-node --input-type=module -e 'import { runManagedClaude } from "./dist/packages/adapters/src/claude-launcher.js"; process.exitCode = await runManagedClaude({label:"Claude",gatewayUrl:"http://127.0.0.1:8787"});'
+cd /absolute/path/to/project
+node /absolute/path/to/agentree/demo/managed-claude.mjs --label "Claude"
 ```
 
-The launcher registers a Gateway session, allocates the Claude native session ID, installs PreToolUse, PostToolUse, and PostToolUseFailure hooks through temporary settings, configures the session-bound Agentree MCP server, listens for Gateway kill requests, and reports the observed child exit. Tool retries use Claude's `tool_use_id`. PreToolUse asks Gateway before execution and denies on transport failure. The MCP process rechecks its session credential before each operation.
+The wrapper loads the admin token from the configured Gateway data directory unless `HARNESS_ADMIN_TOKEN` is set. Use `--gateway <url>` or `HARNESS_GATEWAY_URL` for a nondefault address. Additional Claude arguments follow `--`, for example `-- --model <model>`.
 
-The teammate with Claude Code can run `npm run smoke:native -- claude` from the repository root after `npm ci`; this starts an isolated temporary Gateway, runs the real Claude launcher and checks that the agent proposed branch work through MCP. The smoke does not need a preexisting Gateway. Save the printed evidence path and send the result back to the integration owner. This smoke has not been run on a Claude-equipped machine yet.
+The launcher creates a fresh session with temporary pre/post-tool hooks and a session-bound MCP server, monitors stop requests, and reports the child exit. See [managed Claude implementation](../packages/adapters/CLAUDE_MANAGED.md) for hook behavior and configuration ownership.
 
 ## Codex App Server
 
-Install and authenticate `codex` and use a Node.js 24 runtime. `ManagedCodex.open` owns the App Server connection and registers its native thread ID with Gateway. Example from the repository root after building:
+`ManagedCodex.open` owns the App Server connection and registers its native thread ID. Run this example from the repository root after building; change `cwd` to the absolute project directory:
 
 ```sh
-export HARNESS_ADMIN_TOKEN="$(cat ~/.local/share/agentree/admin-token)"
+export HARNESS_ADMIN_TOKEN="$(cat "${GATEWAY_DATA_DIR:-$HOME/.local/share/agentree}/admin-token")"
 node --input-type=module <<'JS'
 import { resolve } from 'node:path';
 import { ManagedCodex } from './dist/packages/adapters/src/codex-managed.js';
 const native = await ManagedCodex.open({
   gatewayUrl: 'http://127.0.0.1:8787',
-  databasePath: resolve(process.env.HOME, '.local/share/agentree/gateway.sqlite'),
-  cwd: process.cwd(), label: 'Codex',
+  databasePath: resolve(process.env.GATEWAY_DATA_DIR ?? resolve(process.env.HOME, '.local/share/agentree'), 'gateway.sqlite'),
+  cwd: '/absolute/path/to/project', label: 'Codex',
 });
 try {
   console.log('Registration file:', native.registrationFile);
@@ -37,11 +37,11 @@ try {
 JS
 ```
 
-The first Codex thread runs a restricted initialization turn with tools disabled because this App Server version cannot resume a new thread before its first turn. It then registers the actual native thread ID, reopens the persisted thread with the session-bound MCP configuration, and starts durable observation. The registration file has mode `0600`; protect it as a session credential. `ManagedCodex.open({...same options, resumeFile: path})` reconnects an active session and replays unacknowledged observations from the journal. A normal `close()` ends the logical Gateway session; it cannot then be resumed.
+Review supported approval callbacks in the Console while the turn runs. `close()` ends the Gateway session. To reconnect after a host interruption while the session remains active, supply its private `registrationFile` as `resumeFile` with the same Gateway, project, and database options. See [Codex implementation](../packages/adapters/CODEX_APP_SERVER.md) for bootstrap, state paths, and recovery.
 
-Run `npm run smoke:native -- codex` for an isolated real Codex smoke. The test expects an authenticated Codex App Server and checks registration, native turn completion, Gateway-approved MCP work proposal, and Core branch visibility.
+An active managed Codex host also polls the [task dispatch API](TASK_DISPATCH_API.md) for explicit human instructions. Existing Claude CLI sessions and arbitrary Codex Desktop conversations are not supported dispatch targets. Use the Console Tasks page to submit and monitor tasks.
 
-## What the integration enforces
+## Supported controls
 
 | Runtime / operation | Observed by Agentree | Gateway decision before execution |
 | --- | --- | --- |
@@ -55,12 +55,18 @@ Run `npm run smoke:native -- codex` for an isolated real Codex smoke. The test e
 
 The Codex adapter does not turn every native tool into a Gateway-controlled operation. It reports `preExecutionInterception: false` for the adapter as a whole. Gateway controls only the supported callbacks above; ordinary notifications are evidence, not proof of pre-execution enforcement. Session identity comes from the registered runtime connection and credential, never from MCP tool arguments.
 
-## Validation
+## Checks and troubleshooting
 
-`npm run typecheck`, `npm test`, and `npm run build` cover the codebase. The MCP → Core → Sync → MCP integration is covered by the MCP integration tests, including current Main snapshots, corrections, retries, acknowledgments and persisted retrieval. The supervision refactor is verified with deterministic native integration fixtures; live Claude/Codex smoke requires local runtime credentials and is not implied by those tests.
+Run `npm run smoke:native -- claude` or `npm run smoke:native -- codex` for an isolated live check; see [real-agent checks](../demo/REAL_AGENTS.md) for prerequisites and evidence. Automated fixtures and live runtime evidence are documented separately in [verification](SUPERVISION_VERIFICATION.md).
 
-## Supervision context and corrections
+| Symptom | Check |
+| --- | --- |
+| Startup fails on `node:sqlite` | Use Node.js 24+ |
+| Missing token or empty workspace | Start the Gateway and use the same `GATEWAY_DATA_DIR` and database everywhere |
+| Console pairing fails | Use the configured Console origin and consistent `localhost` hostnames; check `GATEWAY_CONSOLE_ORIGINS` |
+| Launcher reports missing build | Run `npm run build` at the repository root |
+| Hook immediately denies | Check Gateway reachability and session credential; transport failure denies by default |
+| Agent tools run without Agentree approval | Check that the managed launcher is used and that this tool has a supported interception path |
+| Main/correction does not affect agent behavior | The agent must retrieve context through MCP; delivery is not behavioral compliance |
 
-The configured Agentree MCP server exposes current human-governed Main, branch work and branch-addressed human corrections. Agents submit plain-text work proposals with optional affected files and native event references. Humans edit Main directly and accept or reject proposals in the Console. A merge accepts records and conclusions; Git continues to manage source control.
-
-Retrieval and acknowledgment do not prove an agent followed a correction. There is no unsolicited push into an arbitrary running native session. Passive logs alone cannot deliver messages; the agent must use its configured MCP tools. Tool denials can include a correction reason through the existing native interception path.
+The [MCP tool reference](../packages/mcp/README.md) lists reads and proposals. Main editing, work acceptance, and correction creation are human operations described in the [Gateway API](GATEWAY_API.md).

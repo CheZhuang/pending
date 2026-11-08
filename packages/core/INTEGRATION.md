@@ -1,7 +1,23 @@
 # Core integration
 
-Use `ApplicationService` from `src/index.ts` and the supervision contracts from `packages/contracts`. The Gateway constructs an actor from authenticated credentials. MCP binds that same actor to the native session and revalidates credentials for every call.
+Construct `AgentreeService` from [src/index.ts](src/index.ts) with an entity store and a trusted actor. `ApplicationService` is a TypeScript interface type, not a constructor. Use records and validation from [Contracts](../contracts/README.md).
 
-Read `main`, `branchOverview`, `conflicts` or `supervision`. Agents use `proposeWork` with text, optional rooted files/native evidence and explicit incompatible Main entry references. Humans use `editMain`, `removeMain`, `restoreMain`, `mainHistory`, `decideMerge`, `reportConflict`, `decideConflict` and `sendCorrection`. Preserve the global Main revision when deciding, editing or restoring. `mainAtRevision` previews a historical snapshot. Restoration selects a historical global revision and appends a new revision atomically; the optional entry ID limits restoration to that entry. See [Main API](../../docs/MAIN_API.md).
+```ts
+import { AgentreeService } from './src/index.js';
 
-The former ContextCommit, knowledge kind/key/scope, MergeRequest and Review methods are intentionally removed. Historical entities remain in SQLite only for migration and audit. See [Gateway API](../../docs/GATEWAY_API.md).
+const service = new AgentreeService(store, { type: 'human', id: 'local-admin' });
+const snapshot = service.main(workspaceId);
+service.editMain(workspaceId, { body: 'Preserve public API compatibility.' }, snapshot.revision);
+```
+
+Here `store` and `workspaceId` are host-provided dependencies. The Gateway derives actors from credentials. The native MCP host binds a session actor and revalidates the credential before every call; never deserialize an actor from agent input.
+
+| Operation | Service methods |
+| --- | --- |
+| Read context | `main`, `branchOverview`, `conflicts`, `supervision` |
+| Main history | `mainHistory`, `mainAtRevision` |
+| Human Main writes | `editMain`, `removeMain`, `restoreMain` |
+| Agent proposals | `proposeWork` |
+| Human assessment | `decideMerge`, `reportConflict`, `decideConflict`, `sendCorrection` |
+
+Pass the expected global Main revision for edits, removals, restoration, and merge decisions. See [Main API](../../docs/MAIN_API.md) for stale writes and restoration, and [migration](../../docs/MIGRATION.md) for retired service models.

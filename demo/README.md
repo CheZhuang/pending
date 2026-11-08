@@ -1,23 +1,13 @@
-# Deterministic two-agent supervision demo
+# Deterministic supervision demo
 
-Run `npm run demo`. The demo uses a temporary SQLite database and deterministic
-mock Claude/Codex activity; it does not contact a live model or modify the
-project.
+From the repository root with Node.js 24+ and dependencies installed:
 
-It exercises the whole supervision loop:
+```sh
+npm run demo
+```
 
-1. Create a workspace, logical branches and two session bindings.
-2. Replay rooted Claude and Codex file observations through the adapter layer.
-3. Add human-governed Main guidance and retrieve the current Main snapshot with
-   both MCP clients.
-4. Submit branch work with affected files and an explicit incompatible Main
-   entry reference.
-5. Inspect the generated potential conflict, record a human disposition, and
-   send a correction to one branch.
-6. Accept one work record into Main and retrieve the replacement Main snapshot.
-7. Confirm an agent's attempted Main edit is denied and audited.
+The demo uses temporary SQLite state and two authenticated MCP clients with simulated Claude/Codex activity. It needs no running Gateway, Console, native runtime, or model credentials and does not modify project files.
 
-Observed file overlap is evidence for inspection, not a semantic conflict
-claim. Branch work remains proposed until a human accepts it. Retrieval and
-acknowledgment do not prove that an agent followed Main or a correction. There
-is no native push to an active runtime; the agent reads through MCP.
+The scenario creates a workspace and session branches, replays rooted native observations, writes human Main guidance, and retrieves it with both MCP clients. Agents propose work with file evidence and an explicit Main incompatibility. A human assesses the potential conflict, sends a correction, accepts work into Main, and verifies the updated snapshot. An attempted agent Main edit is denied and audited.
+
+See [real-agent checks](REAL_AGENTS.md) for live runtime rehearsal and the status of `demo:real`; see [architecture](../docs/ARCHITECTURE.md) for domain rules.
