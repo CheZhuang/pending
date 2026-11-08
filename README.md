@@ -37,6 +37,8 @@ npm run agentree -- main add "Keep the public API backward compatible."
 
 Then [launch Claude Code or Codex](docs/NATIVE_AGENTS.md). Managed launchers can also create a workspace and branch from the project directory. Use the Console's Main, Branches, Conflicts, Activity, and Approvals pages to supervise the session.
 
+Already-running agents appear automatically in the Console's computer-wide **Local coding agents** inventory on Linux, macOS and Windows. Independent processes expose metadata; existing managed sessions keep their authenticated activity and controls. See [discovery capabilities and limitations](docs/NATIVE_DISCOVERY.md).
+
 For a standalone Console preview, use `npm --prefix apps/web run dev` and open `http://localhost:5173/?api=mock`. For a deterministic two-agent workflow without native credentials or model calls, run `npm run demo`.
 
 ## Local configuration

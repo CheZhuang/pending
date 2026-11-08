@@ -169,6 +169,8 @@ export function createMock({ speed = 1 } = {}) {
     workspaces: async () => { await wait(); return [copy(workspace)]; },
     branches: async () => { await wait(); return copy(branches.filter(b => b.id !== workspace.mainBranchId)); },
     sessions: async () => { await wait(); return sessions.map(sessionView); },
+    processes: async () => ({status:'ok',processes:[],scannedAt:new Date().toISOString()}),
+    refreshProcesses: async () => ({status:'ok',processes:[],scannedAt:new Date().toISOString()}),
     killSession: id => run(() => {
       const session = sessions.find(s => s.id === id); if (!session) throw new ApiError(404, 'NOT_FOUND', id);
       if (session.state === 'ended') throw new ApiError(409, 'STATE', 'Session already ended');
