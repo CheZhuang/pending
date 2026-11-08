@@ -9,6 +9,7 @@ import { switchMode } from '../api/index.js';
 import { describe } from '../api/errors.js';
 import { boot, selectWorkspace, state } from '../state.js';
 import { frappe } from '../theme.js';
+import PendingTreeLogo from './PendingTreeLogo.vue';
 
 const route = useRoute();
 const showModeSelector = import.meta.env.DEV;
@@ -55,8 +56,7 @@ onMounted(boot);
       show-trigger="bar" @collapse="collapsed = true" @expand="collapsed = false"
     >
       <div class="brand">
-        <img src="/favicon.svg" alt="" width="26" height="26" />
-        <span>PendingTree</span>
+        <PendingTreeLogo :size="30" />
       </div>
       <NMenu :value="route.meta.menu ?? route.name" :options="menu" />
       <div v-if="!collapsed" class="sider-foot muted">
