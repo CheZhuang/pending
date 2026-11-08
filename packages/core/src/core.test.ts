@@ -176,3 +176,24 @@ test('invalid file roots and traversal are rejected; failed batch acceptance cha
     assert.equal(f.store.get<{state:string}>(good.id,'branch-work')?.state,'proposed');
   } finally { f.store.close(); }
 });
+
+test('declared files and native activity share canonical identity across nested workspace roots', () => {
+  const store = new SqliteStore(':memory:');
+  try {
+    const human = new AgentreeService(store,{type:'human',id:'reviewer'});
+    const workspace = human.createWorkspace('nested',[{id:'repo',path:'/tmp/repo'},{id:'lib',path:'/tmp/repo/packages/lib'}]);
+    const a = human.createBranch(workspace.id,'declared');
+    const b = human.createBranch(workspace.id,'observed');
+    const sa = human.registerSession(a.id,{id:'a',name:'A'},'claude-code','a');
+    const sb = human.registerSession(b.id,{id:'b',name:'B'},'codex','b');
+    const author = new AgentreeService(store,{type:'agent',sessionId:sa.id});
+    const proposal = author.proposeWork(a.id,{body:'Change library API',files:[{rootId:'repo',path:'packages/lib/api.ts'}]});
+    assert.deepEqual(proposal.files,[{rootId:'lib',path:'api.ts'}]);
+    human.ingest({id:'nested-observation',workspaceId:workspace.id,sessionId:sb.id,source:'codex',nativeId:'nested-observation',
+      mode:'observed',type:'item/completed',payload:{changes:[{path:'/tmp/repo/packages/lib/api.ts'}]},occurredAt:new Date().toISOString()});
+    const overlap = human.conflicts(workspace.id).find(c => c.branchIds.length === 2);
+    assert.ok(overlap);
+    assert.deepEqual(overlap.files,[{rootId:'lib',path:'api.ts'}]);
+    assert.equal(overlap.status,'potential');
+  } finally { store.close(); }
+});

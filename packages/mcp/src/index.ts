@@ -48,7 +48,10 @@ export function createAgentreeMcpServer(binding: BoundMcpSession): McpServer {
   server.registerTool('context_acknowledge', {
     title: 'Acknowledge retrieved items', description: 'Mark delivered item IDs as acknowledged for this session.',
     inputSchema: { itemIds: z.array(z.string().min(1)).max(1000) }, outputSchema,
-  }, bound(({ itemIds }: { itemIds: string[] }) => ({ acknowledged: sync.acknowledge(session.id, itemIds) })));
+  }, bound(({ itemIds }: { itemIds: string[] }) => {
+    service.workspace(session.workspaceId); // Core authorization also applies to delivery metadata writes.
+    return { acknowledged: sync.acknowledge(session.id, itemIds) };
+  }));
 
   server.registerTool('work_propose', {
     title: 'Propose branch work', description: 'Record work completed on this branch with optional rooted files and native evidence IDs.',
