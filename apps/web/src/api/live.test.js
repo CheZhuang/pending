@@ -33,6 +33,17 @@ test('live requests use same-origin paths without pairing credentials', async ()
   assert.equal(live.logout, undefined);
 });
 
+test('local discovery API uses the mock-first contract and same-origin requests', async () => {
+  let request;
+  globalThis.fetch = async (url, options) => { request = { url, options }; return new Response(JSON.stringify({ refreshedAt: 'now', agents: [] }), { status: 200 }); };
+  assert.deepEqual(await live.discoveredAgents(), { refreshedAt: 'now', agents: [] });
+  assert.equal(request.url, '/v1/discovery/agents');
+  assert.equal(request.options.headers.authorization, undefined);
+  await live.refreshDiscovery();
+  assert.equal(request.url, '/v1/discovery/refresh');
+  assert.equal(request.options.method, 'POST');
+});
+
 test('restore on an older Gateway is reported as unsupported; real errors pass through with details', async () => {
   respond(400, { error: { code: 'BODY', message: 'Required' } });
   await assert.rejects(() => live.restoreMain('w', { revision: 1, expectedRevision: 7 }), { code: 'UNSUPPORTED' });
