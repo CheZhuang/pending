@@ -75,3 +75,18 @@ Authorization: Bearer {{sessionToken}}
 ### Agent authority check: expected 403 DENY (agent cannot list/approve approvals)
 GET {{baseUrl}}/v1/approvals
 Authorization: Bearer {{sessionToken}}
+
+### Read current authoritative Main (both native runtimes use their session token)
+GET {{baseUrl}}/v1/workspaces/{{workspaceId}}/main
+Authorization: Bearer {{sessionToken}}
+
+### Write a human expectation directly (use the actual current revision)
+POST {{baseUrl}}/v1/workspaces/{{workspaceId}}/main
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"body":"Keep the public API backward compatible.","expectedRevision":0}
+
+### Inspect branches, activity, proposed work and potential conflicts
+GET {{baseUrl}}/v1/workspaces/{{workspaceId}}/supervision
+Authorization: Bearer {{adminToken}}

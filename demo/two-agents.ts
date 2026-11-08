@@ -74,7 +74,7 @@ export async function runDemo(io: DemoIo, home = mkdtempSync(join(tmpdir(), 'age
     $('branch', 'show', 'claude-auth'); $('branch', 'show', 'codex-api');
 
     step(4, 'Human reviews work, records a potential overlap, and sends a correction');
-    $('conflict', 'list'); const conflict = json<Array<{ id: string; status: string; evidenceIds: string[] }>>('conflict', 'list').find(c => c.status === 'potential' && c.evidenceIds.includes(xwork.id));
+    $('conflict', 'list'); const conflict = json<Array<{ id: string; status: string; mainEntryId?: string; evidenceIds: string[] }>>('conflict', 'list').find(c => c.status === 'potential' && c.mainEntryId === mainEntry.id && c.evidenceIds.includes(xwork.id));
     if (conflict) $('conflict', 'decide', conflict.id, 'confirmed', 'The proposal explicitly flags incompatibility with the active Main header requirement.');
     $('correction', 'send', 'codex-api', 'Keep the existing response header name exactly as recorded in Main.');
     const updateC = await claude.tool<ContextDelta>('context_sync', { requestId: 'update-c' }); const updateX = await codex.tool<ContextDelta>('context_sync', { requestId: 'update-x' });

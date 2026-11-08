@@ -13,7 +13,7 @@ node --input-type=module -e 'import { runManagedClaude } from "./dist/packages/a
 
 The launcher registers a Gateway session, allocates the Claude native session ID, installs PreToolUse, PostToolUse, and PostToolUseFailure hooks through temporary settings, configures the session-bound Agentree MCP server, listens for Gateway kill requests, and reports the observed child exit. Tool retries use Claude's `tool_use_id`. PreToolUse asks Gateway before execution and denies on transport failure. The MCP process rechecks its session credential before each operation.
 
-The teammate with Claude Code can run `npm run smoke:native -- claude` from the repository root after `npm ci`; this starts an isolated temporary Gateway, runs the real Claude launcher and checks that the agent published context through MCP. The smoke does not need a preexisting Gateway. Save the printed evidence path and send the result back to the integration owner. This smoke has not been run on a Claude-equipped machine yet.
+The teammate with Claude Code can run `npm run smoke:native -- claude` from the repository root after `npm ci`; this starts an isolated temporary Gateway, runs the real Claude launcher and checks that the agent proposed branch work through MCP. The smoke does not need a preexisting Gateway. Save the printed evidence path and send the result back to the integration owner. This smoke has not been run on a Claude-equipped machine yet.
 
 ## Codex App Server
 
@@ -39,7 +39,7 @@ JS
 
 The first Codex thread runs a restricted initialization turn with tools disabled because this App Server version cannot resume a new thread before its first turn. It then registers the actual native thread ID, reopens the persisted thread with the session-bound MCP configuration, and starts durable observation. The registration file has mode `0600`; protect it as a session credential. `ManagedCodex.open({...same options, resumeFile: path})` reconnects an active session and replays unacknowledged observations from the journal. A normal `close()` ends the logical Gateway session; it cannot then be resumed.
 
-Run `npm run smoke:native -- codex` for an isolated real Codex smoke. The test expects an authenticated Codex App Server and checks registration, native turn completion, Gateway-approved MCP publication, and Core context visibility.
+Run `npm run smoke:native -- codex` for an isolated real Codex smoke. The test expects an authenticated Codex App Server and checks registration, native turn completion, Gateway-approved MCP work proposal, and Core branch visibility.
 
 ## What the integration enforces
 
@@ -57,4 +57,10 @@ The Codex adapter does not turn every native tool into a Gateway-controlled oper
 
 ## Validation
 
-`npm run typecheck`, `npm test`, and `npm run build` cover the codebase. The MCP → Core → Sync → MCP integration is covered by the MCP integration tests, including scoped sync, token budgets, retries, acknowledgements, and persisted delivery. The real Codex smoke has passed locally. Real Claude smoke remains for a teammate with Claude Code.
+`npm run typecheck`, `npm test`, and `npm run build` cover the codebase. The MCP → Core → Sync → MCP integration is covered by the MCP integration tests, including current Main snapshots, corrections, retries, acknowledgments and persisted retrieval. The supervision refactor is verified with deterministic native integration fixtures; live Claude/Codex smoke requires local runtime credentials and is not implied by those tests.
+
+## Supervision context and corrections
+
+The configured Agentree MCP server exposes current human-governed Main, branch work and branch-addressed human corrections. Agents submit plain-text work proposals with optional affected files and native event references. Humans edit Main directly and accept or reject proposals in the Console. A merge accepts records and conclusions; Git continues to manage source control.
+
+Retrieval and acknowledgment do not prove an agent followed a correction. There is no unsolicited push into an arbitrary running native session. Passive logs alone cannot deliver messages; the agent must use its configured MCP tools. Tool denials can include a correction reason through the existing native interception path.
