@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { SqliteStore } from '../../storage/src/index.js';
 import {
     DomainError, mainInputSchema, workInputSchema, type Actor, type Branch, type MainEntry,
-    type MainInput, type MainSnapshot, type BranchWork, type WorkInput, type FileRef,
+    type MainInput, type MainSnapshot, type MainRevision, type BranchWork, type WorkInput, type FileRef,
     type Merge, type Correction, type Conflict, type BranchOverview, type SupervisionContext,
     type NormalizedEvent, type Operation, type PolicyDecision, type Session, type Workspace,
     type EventQuery, type EventPage,
@@ -14,6 +14,12 @@ import { createHash } from 'node:crypto';
 export { normalizeFile } from './scope.js';
 const id = () => randomUUID();
 const integer = (n: number) => Number.isSafeInteger(n) && n >= 0;
+
+/** Existing immutable entry rows and whole-Main restoration markers share one ledger. */
+interface MainRevisionRecord {
+    id: string; workspaceId: string; entry?: MainEntry;
+    revision?: number; actor?: Actor; createdAt?: string; restoredFromRevision?: number;
+}
 
 /** Construct only at the trusted daemon boundary. Never deserialize Actor from agent input. */
 export class AgentreeService {
@@ -137,8 +143,11 @@ export class AgentreeService {
         return this.get<Branch>(this.get<Workspace>(workspaceId,'workspace').mainBranchId,'branch');
     }
     private checkRevision(workspaceId: string, expected: number) {
-        if (!integer(expected) || this.mainBranch(workspaceId).revision !== expected)
-            throw new DomainError('STALE','Main changed; refresh before making this change');
+        if (!integer(expected)) throw new DomainError('REVISION','Expected Main revision must be a nonnegative safe integer');
+        const currentRevision = this.mainBranch(workspaceId).revision;
+        if (currentRevision !== expected)
+            throw new DomainError('STALE',`Main changed from revision ${expected} to ${currentRevision}; refresh and review before retrying`,
+                {expectedRevision:expected,currentRevision});
     }
     private files(workspaceId: string, files: FileRef[]): FileRef[] {
         const w = this.get<Workspace>(workspaceId,'workspace');
@@ -147,32 +156,79 @@ export class AgentreeService {
     }
     main(workspaceId: string): MainSnapshot {
         this.workspace(workspaceId);
-        return {workspaceId, revision:this.mainBranch(workspaceId).revision,
-            entries:this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId && !e.removed),
-            removedEntries:this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId && e.removed)};
+        const read = (): MainSnapshot => {
+            const revision = this.mainBranch(workspaceId).revision;
+            const entries = this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId);
+            return {workspaceId,revision,entries:entries.filter(e => !e.removed),removedEntries:entries.filter(e => e.removed)};
+        };
+        // Pair the revision and content even when another daemon connection commits a rollback.
+        return this.store.db.isTransaction ? read() : this.store.transaction(read,false);
     }
-    mainHistory(workspaceId: string, entryId: string): MainEntry[] {
+    mainHistory(workspaceId: string): MainRevision[];
+    mainHistory(workspaceId: string, entryId: string): MainEntry[];
+    mainHistory(workspaceId: string, entryId?: string): MainRevision[] | MainEntry[] {
         this.workspace(workspaceId);
-        const entry = this.get<MainEntry>(entryId,'main-entry');
-        if (entry.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
-        return this.store.list<{entry:MainEntry}>('main-revision').map(r => r.entry).filter(e => e.id === entryId);
+        const records = this.store.list<MainRevisionRecord>('main-revision').filter(r => r.workspaceId === workspaceId);
+        if (entryId !== undefined) {
+            const entry = this.get<MainEntry>(entryId,'main-entry');
+            if (entry.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
+            return records.flatMap(r => r.entry?.id === entryId ? [r.entry] : []).sort((a,b) => a.revision-b.revision);
+        }
+        const revisions = new Map<number,MainRevision>();
+        for (const record of records) {
+            const revision = record.entry?.revision ?? record.revision!;
+            const entryIds = record.entry ? [record.entry.id] : [];
+            const restoredFromRevision = record.entry?.restoredFrom?.revision ?? record.restoredFromRevision;
+            const previous = revisions.get(revision);
+            if (previous) previous.entryIds.push(...entryIds);
+            else revisions.set(revision,{revision,actor:record.entry?.actor ?? record.actor!,
+                createdAt:record.entry?.createdAt ?? record.createdAt!,entryIds,
+                ...(restoredFromRevision !== undefined ? {restoredFromRevision} : {})});
+        }
+        return [...revisions.values()].sort((a,b) => a.revision-b.revision);
+    }
+    private historicalMain(workspaceId: string, revision: number): MainSnapshot {
+        if (!integer(revision)) throw new DomainError('REVISION','Historical Main revision must be a nonnegative safe integer');
+        if (revision > this.mainBranch(workspaceId).revision) throw new DomainError('NOT_FOUND','Historical Main revision does not exist');
+        const versions = this.store.list<MainRevisionRecord>('main-revision')
+            .flatMap(r => r.workspaceId === workspaceId && r.entry && r.entry.revision <= revision ? [r.entry] : [])
+            .sort((a,b) => a.revision-b.revision);
+        const latest = new Map<string,MainEntry>();
+        for (const entry of versions) latest.set(entry.id,entry);
+        const entries = [...latest.values()];
+        return {workspaceId,revision,entries:entries.filter(e => !e.removed),removedEntries:entries.filter(e => e.removed)};
+    }
+    /** Read a consistent historical snapshot without changing the current Main. */
+    mainAtRevision(workspaceId: string, revision: number): MainSnapshot {
+        this.workspace(workspaceId);
+        return this.store.transaction(() => this.historicalMain(workspaceId,revision),false);
+    }
+    private nextMainRevision(workspaceId: string): number {
+        const branch = this.mainBranch(workspaceId);
+        if (!integer(branch.revision + 1)) throw new DomainError('REVISION','Main revision limit reached');
+        branch.revision++;
+        this.store.put(branch.id,'branch',branch);
+        return branch.revision;
+    }
+    /** Caller owns the transaction; the immutable ledger and current projection move together. */
+    private persistMain(entry: MainEntry, eventType: string): MainEntry {
+        this.store.put(entry.id,'main-entry',entry);
+        const revisionId = id();
+        this.store.insert(revisionId,'main-revision',{id:revisionId,workspaceId:entry.workspaceId,entry});
+        this.audit(eventType,entry,entry.workspaceId);
+        return entry;
     }
     /** Caller owns the write transaction. Every revision, including removal, is retained. */
     private writeMain(workspaceId: string, input: MainInput, entryId?: string, removed = false, sourceWorkId?: string): MainEntry {
         const parsed = mainInputSchema.parse(input);
-        const b = this.mainBranch(workspaceId);
         const prior = entryId ? this.get<MainEntry>(entryId,'main-entry') : undefined;
         if (prior && prior.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
-        if (prior?.removed) throw new DomainError('STATE','Removed entries cannot be edited; create a new entry');
+        if (prior?.removed) throw new DomainError('STATE','Removed entries must be restored before editing');
         const entry: MainEntry = {id:entryId ?? id(),workspaceId,body:parsed.body,files:this.files(workspaceId,input.files === undefined && prior ? prior.files : parsed.files),
-            revision:++b.revision,removed,actor:this.actor,createdAt:new Date().toISOString(),
-            ...(sourceWorkId ? {sourceWorkId} : prior?.sourceWorkId ? {sourceWorkId:prior.sourceWorkId} : {})};
-        this.store.put(b.id,'branch',b);
-        this.store.put(entry.id,'main-entry',entry);
-        const revisionId = id();
-        this.store.insert(revisionId,'main-revision',{id:revisionId,workspaceId,entry});
-        this.audit(removed ? 'main.removed' : prior ? 'main.updated' : 'main.created',entry,workspaceId);
-        return entry;
+            revision:this.nextMainRevision(workspaceId),removed,actor:this.actor,createdAt:new Date().toISOString(),
+            ...(sourceWorkId ? {sourceWorkId} : prior?.sourceWorkId ? {sourceWorkId:prior.sourceWorkId} : {}),
+            ...(prior?.legacyCommitId ? {legacyCommitId:prior.legacyCommitId} : {})};
+        return this.persistMain(entry,removed ? 'main.removed' : prior ? 'main.updated' : 'main.created');
     }
     editMain(workspaceId: string, input: MainInput, expectedRevision: number, entryId?: string, remove = false): MainEntry {
         this.guard('main.edit',undefined,false,workspaceId);
@@ -180,7 +236,42 @@ export class AgentreeService {
         return this.store.transaction(() => {
             this.checkRevision(workspaceId,expectedRevision);
             if (remove && !entryId) throw new DomainError('MAIN','Removal requires an existing entry');
-            return this.writeMain(workspaceId,input,entryId,remove);
+            // Removal preserves the current content even for legacy callers supplying a body.
+            const content = remove ? this.get<MainEntry>(entryId!,'main-entry') : input;
+            return this.writeMain(workspaceId,content,entryId,remove);
+        });
+    }
+    removeMain(workspaceId: string, entryId: string, expectedRevision: number): MainEntry {
+        return this.editMain(workspaceId,{body:''},expectedRevision,entryId,true);
+    }
+    restoreMain(workspaceId: string, revision: number, expectedRevision: number): MainSnapshot;
+    restoreMain(workspaceId: string, revision: number, expectedRevision: number, entryId: string): MainEntry;
+    restoreMain(workspaceId: string, revision: number, expectedRevision: number, entryId?: string): MainSnapshot | MainEntry {
+        this.guard('main.edit',undefined,false,workspaceId);
+        this.get<Workspace>(workspaceId,'workspace');
+        return this.store.transaction(() => {
+            this.checkRevision(workspaceId,expectedRevision);
+            const snapshot = this.historicalMain(workspaceId,revision);
+            const target = new Map([...snapshot.entries,...snapshot.removedEntries].map(e => [e.id,e]));
+            const current = this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId);
+            const selected = entryId !== undefined ? current.filter(e => e.id === entryId) : current;
+            if (entryId !== undefined && (!selected.length || !target.has(entryId)))
+                throw new DomainError('NOT_FOUND','Main entry did not exist at the selected revision in this workspace');
+            const newRevision = this.nextMainRevision(workspaceId);
+            const createdAt = new Date().toISOString();
+            let restored: MainEntry | undefined;
+            for (const prior of selected) {
+                const source = target.get(prior.id);
+                restored = this.persistMain({...(source ?? prior),revision:newRevision,actor:this.actor,createdAt,
+                    removed:source?.removed ?? true,
+                    restoredFrom:{revision,...(source ? {entryRevision:source.revision} : {})}},'main.restored');
+            }
+            if (entryId !== undefined) return restored!;
+            // A marker also records empty/no-op whole restorations in the immutable ledger.
+            const marker: MainRevisionRecord = {id:id(),workspaceId,revision:newRevision,actor:this.actor,createdAt,restoredFromRevision:revision};
+            this.store.insert(marker.id,'main-revision',marker);
+            this.audit('main.snapshot-restored',marker,workspaceId);
+            return this.main(workspaceId);
         });
     }
     proposeWork(branchId: string, input: WorkInput): BranchWork {
@@ -348,4 +439,4 @@ export class AgentreeService {
         return result;
     }
 }
-export type ApplicationService = Pick<AgentreeService, 'workspace' | 'branches' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'main' | 'mainHistory' | 'editMain' | 'proposeWork' | 'branchOverview' | 'conflicts' | 'reportConflict' | 'decideConflict' | 'sendCorrection' | 'merges' | 'decideMerge' | 'supervision' | 'authorize' | 'executeControlled'>;
+export type ApplicationService = Pick<AgentreeService, 'workspace' | 'branches' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'main' | 'mainHistory' | 'mainAtRevision' | 'editMain' | 'removeMain' | 'restoreMain' | 'proposeWork' | 'branchOverview' | 'conflicts' | 'reportConflict' | 'decideConflict' | 'sendCorrection' | 'merges' | 'decideMerge' | 'supervision' | 'authorize' | 'executeControlled'>;

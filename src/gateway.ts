@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { AgentreeService } from '../packages/core/src/index.js';
-import { DomainError, mainInputSchema, workInputSchema, type Session, type Workspace } from '../packages/contracts/src/index.js';
+import { DomainError, workInputSchema, type Session, type Workspace } from '../packages/contracts/src/index.js';
 import { TaskDispatch } from './task-dispatch.js';
 export interface GatewayOptions {
     database: string;
@@ -19,6 +19,16 @@ const digest = (token: string) => createHash('sha256').update(token).digest('hex
 const text = z.string().min(1);
 const registration = z.object({ runtime: text, cwd: text.optional(), label: text.optional(), branchId: text.optional(), nativeId: text.optional() });
 const decision = z.object({ requestId: text, sessionId: text.optional(), tool: text, input: z.unknown(), nativeSessionId: text.optional(), cwd: text.optional() });
+const safeRevision = z.number().min(0).refine(Number.isSafeInteger, 'Expected a safe integer revision');
+const mainWrite = z.object({ body: z.string().trim().min(1), files: z.array(z.object({ rootId: text, path: text })).optional(), expectedRevision: safeRevision, remove: z.boolean().optional() });
+const mainRestore = z.object({ revision: safeRevision, expectedRevision: safeRevision });
+function decodeMainSegment(value: string): string {
+    let decoded: string;
+    try { decoded = decodeURIComponent(value); }
+    catch { throw new DomainError('BODY','Malformed URL encoding in Main path'); }
+    if (decoded.includes('/') || decoded.includes('\\')) throw new DomainError('BODY','Main path components cannot contain slashes');
+    return decoded;
+}
 /** Local daemon boundary: HTTP input never supplies a Core actor. */
 export function createGateway(options: GatewayOptions) {
     if (options.adminToken.length < 32)
@@ -373,19 +383,52 @@ export function createGateway(options: GatewayOptions) {
                 res.on('close', () => { clearInterval(interval); clearInterval(heartbeat); streams.delete(res); });
                 return;
             }
-            const mainRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/main(?:\/([^/]+)(?:\/(history))?)?$/);
-            if (mainRoute) {
-                const [,wid,entryId,history] = mainRoute;
-                if (method === 'GET') return send(history && entryId ? svc.mainHistory(wid!,entryId) : svc.main(wid!));
-                if (method === 'POST' && !history) {
+            // Resolve reserved Main paths before entry IDs so IDs named "history",
+            // "preview" or "restore" cannot shadow the API surface.
+            const mainBase = path.match(/^\/v1\/workspaces\/([^/]+)\/main$/);
+            const mainNested = path.match(/^\/v1\/workspaces\/([^/]+)\/main\/(.+)$/);
+            if (mainBase && method === 'GET') return send(svc.main(decodeMainSegment(mainBase[1]!)));
+            if (mainBase && method === 'POST') {
+                human();
+                const b = mainWrite.parse(await body(req));
+                const input = { body: b.body, ...(b.files === undefined ? {} : { files: b.files }) };
+                return send(admin.editMain(decodeMainSegment(mainBase[1]!),input,b.expectedRevision,undefined,b.remove),201);
+            }
+            if (mainNested) {
+                const wid = decodeMainSegment(mainNested[1]!);
+                const nested = mainNested[2]!.split('/').map(decodeMainSegment).join('/');
+                if (nested === 'history' && method === 'GET') return send(svc.mainHistory(wid));
+                if (nested === 'preview' && method === 'GET') {
+                    const revisionText = url.searchParams.get('revision');
+                    const parsed = z.object({revision:safeRevision}).safeParse({revision:revisionText === null || revisionText.trim() === '' ? undefined : Number(revisionText)});
+                    if (!parsed.success) throw parsed.error;
+                    return send(svc.mainAtRevision(wid,parsed.data.revision));
+                }
+                if (nested === 'restore' && method === 'POST') {
                     human();
-                    const raw = await body(req);
-                    const b = mainInputSchema.extend({expectedRevision:z.number().int().min(0),remove:z.boolean().optional()}).parse(raw);
-                    // The schema defaults files to []; only forward files the client actually sent,
-                    // so a text-only edit keeps the entry's file references (core keeps them when omitted).
-                    const sentFiles = typeof raw === 'object' && raw !== null && 'files' in raw;
-                    const input = sentFiles ? {body:b.body,files:b.files} : {body:b.body};
-                    return send(admin.editMain(wid!,input,b.expectedRevision,entryId,b.remove),entryId ? 200 : 201);
+                    const b = mainRestore.parse(await body(req));
+                    return send(admin.restoreMain(wid,b.revision,b.expectedRevision));
+                }
+                const entryHistory = nested.match(/^([^/]+)\/history$/);
+                if (entryHistory && method === 'GET') return send(svc.mainHistory(wid,entryHistory[1]!));
+                const entryRestore = nested.match(/^([^/]+)\/restore$/);
+                if (entryRestore && method === 'POST') {
+                    human();
+                    const b = mainRestore.parse(await body(req));
+                    return send(admin.restoreMain(wid,b.revision,b.expectedRevision,entryRestore[1]!));
+                }
+                const entryRemove = nested.match(/^([^/]+)\/remove$/);
+                if (entryRemove && method === 'POST') {
+                    human();
+                    const b = z.object({expectedRevision:safeRevision}).parse(await body(req));
+                    return send(admin.removeMain(wid,entryRemove[1]!,b.expectedRevision));
+                }
+                // Backward-compatible entry edit/removal endpoint.
+                if (!nested.includes('/') && !['history','preview','restore'].includes(nested) && method === 'POST') {
+                    human();
+                    const b = mainWrite.parse(await body(req));
+                    const input = { body: b.body, ...(b.files === undefined ? {} : { files: b.files }) };
+                    return send(admin.editMain(wid,input,b.expectedRevision,nested,b.remove),200);
                 }
             }
             const supervisionRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/(supervision|conflicts|merges)(?:\/([^/]+))?$/);
@@ -422,7 +465,8 @@ export function createGateway(options: GatewayOptions) {
         }
         catch (error) {
             const code = error instanceof DomainError ? error.code : error instanceof z.ZodError || error instanceof SyntaxError ? 'BODY' : 'INTERNAL';
-            send({ error: { code, message: code === 'INTERNAL' ? 'Internal server error' : (error as Error).message } }, code === 'NOT_FOUND' ? 404 : code === 'DENY' || code === 'IDENTITY' ? 403 : ['STATE', 'STALE', 'REVIEW', 'REQUIRE-APPROVAL'].includes(code) ? 409 : code === 'INTERNAL' ? 500 : 400);
+            const details = error instanceof DomainError ? error.details : undefined;
+            send({ error: { code, message: code === 'INTERNAL' ? 'Internal server error' : (error as Error).message, ...(details === undefined ? {} : {details}) } }, code === 'NOT_FOUND' ? 404 : code === 'DENY' || code === 'IDENTITY' ? 403 : ['STATE', 'STALE', 'REVIEW', 'REQUIRE-APPROVAL'].includes(code) ? 409 : code === 'INTERNAL' ? 500 : 400);
         }
     });
     return { server, store, close: async () => {

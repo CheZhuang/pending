@@ -118,3 +118,38 @@ test('v2 migration and restart retain materialized Main and schema version 3', (
     assert.equal(store.list<MainEntry>('main-entry').length, 1);
   } finally { store?.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
+
+test('migrated Main can be edited and restored without rewriting legacy evidence or schema', () => {
+  const f = legacyV1();
+  let store: SqliteStore | undefined;
+  try {
+    store = new SqliteStore(f.path);
+    let human = new AgentreeService(store, { type: 'human', id: 'reviewer' });
+    const baseline = human.main('w');
+    const originalHistory = human.mainHistory('w', 'legacy-main:c4');
+    const originalCommit = store.get('c4', 'commit');
+    const changed = human.editMain('w', { body: 'Corrected human guidance' }, 4, 'legacy-main:c4');
+    assert.equal(changed.legacyCommitId, 'c4');
+    const restored = human.restoreMain('w', 4, 5, 'legacy-main:c4');
+    assert.equal(restored.body, 'file guidance');
+    assert.deepEqual(restored.files, originalHistory[0]!.files);
+    assert.equal(restored.legacyCommitId, 'c4');
+    assert.deepEqual(restored.restoredFrom, { revision: 4, entryRevision: 4 });
+    assert.deepEqual(human.mainHistory('w', 'legacy-main:c4').slice(0, 1), originalHistory);
+    assert.deepEqual(human.mainAtRevision('w', 4), baseline);
+    const cleared = human.restoreMain('w', 0, 6);
+    assert.equal(cleared.revision, 7);
+    assert.equal(cleared.entries.length, 0);
+    assert.equal(cleared.removedEntries.length, 4);
+    store.close();
+    store = new SqliteStore(f.path);
+    human = new AgentreeService(store, { type: 'human', id: 'after-restart' });
+    const whole = human.restoreMain('w', 4, 7);
+    assert.equal(whole.revision, 8);
+    assert.deepEqual(whole.entries.map(e => e.id), baseline.entries.map(e => e.id));
+    assert.equal(whole.removedEntries[0]?.id, 'legacy-main:c1', 'projected legacy removed state is preserved');
+    assert.deepEqual(store.get('c4', 'commit'), originalCommit);
+    assert.equal(Number(store.db.prepare('PRAGMA user_version').get()!.user_version), 3);
+    assert.equal(store.events<{type:string}>().filter(e => e.type === 'storage.supervision-migrated').length, 1);
+  } finally { store?.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});

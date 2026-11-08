@@ -58,3 +58,27 @@ test('agents can propose branch work but the exposed tools do not grant Main wri
     assert.equal(f.human.main(f.workspace.id).entries.length, 0);
   } finally { await c.close(); f.store.close(); }
 });
+
+test('authenticated MCP readers receive a restored Main snapshot and agents still have no restore tool', async () => {
+  const f = fixture(); const c = await f.connect();
+  try {
+    const entry = f.human.editMain(f.workspace.id, { body: 'temporary decision' }, 0);
+    const before = await c.call('context_sync', { requestId: 'before-rollback' });
+    assert.ok((before.data as ContextDelta).items.some(item => item.kind === 'main' && item.itemId === `main:${f.workspace.id}:1`));
+
+    const restored = f.human.restoreMain(f.workspace.id, 0, 1);
+    assert.equal(restored.revision, 2);
+    const sync = await c.call('context_sync', { requestId: 'after-rollback' });
+    const delta = sync.data as ContextDelta;
+    const mainItem = delta.items.find(item => item.kind === 'main');
+    assert.equal(mainItem?.itemId, `main:${f.workspace.id}:2`);
+    assert.deepEqual((mainItem?.value as { entries: unknown[]; removedEntries: Array<{ id: string }> }).entries, []);
+    assert.deepEqual((mainItem?.value as { removedEntries: Array<{ id: string }> }).removedEntries.map(item => item.id), [entry.id]);
+
+    const context = await c.call('context_get');
+    assert.equal((context.data as { main: { revision: number } }).main.revision, 2);
+    assert.deepEqual((context.data as { main: { removedEntries: Array<{ id: string }> } }).main.removedEntries.map(item => item.id), [entry.id]);
+    const toolNames = (await c.client.listTools()).tools.map(t => t.name);
+    assert.equal(toolNames.some(name => /main.*(restore|edit|remove)/i.test(name)), false);
+  } finally { await c.close(); f.store.close(); }
+});
