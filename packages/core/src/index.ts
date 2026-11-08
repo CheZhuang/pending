@@ -298,51 +298,63 @@ export class AgentreeService {
         });
     }
     branchOverview(branchId: string): BranchOverview {
+        return this.overview(branchId).overview;
+    }
+    /** Overview plus every observed write, so file evidence never ages out of the 30-event activity window. */
+    private overview(branchId: string): { overview: BranchOverview; writes: Array<{ eventId: string; file: FileRef }> } {
         this.guard('context.read',branchId);
         const branch = this.get<Branch>(branchId,'branch');
         const workspace = this.get<Workspace>(branch.workspaceId,'workspace');
         if (branch.id === workspace.mainBranchId) throw new DomainError('BRANCH','Main is the shared reference; use the Main API');
         const sessions = this.store.list<Session>('session').filter(s => s.branchId === branchId);
         const activity = this.store.recentSessionEvents(branch.workspaceId,sessions.map(s => s.id));
+        const writes = this.store.observedSessionEvents(branch.workspaceId,sessions.map(s => s.id)).flatMap(e =>
+            extractTouches(e,workspace.roots).filter(t => t.access === 'write').map(t => ({eventId:e.id,file:{rootId:t.rootId!,path:t.path}})));
         const work = this.store.list<BranchWork>('branch-work').filter(w => w.branchId === branchId);
-        const files = [...work.filter(w => w.state === 'proposed').flatMap(w => w.files),
-            ...activity.flatMap(e => extractTouches(e,workspace.roots).filter(t => t.access === 'write')
-                .map(t => ({rootId:t.rootId!,path:t.path})))];
-        return {branch,sessions,work,files:[...new Map(files.map(f => [JSON.stringify(f),f])).values()],
-            recentActivity:activity,
-            corrections:this.store.list<Correction>('correction').filter(c => c.branchId === branchId)};
+        const files = [...work.filter(w => w.state === 'proposed').flatMap(w => w.files), ...writes.map(w => w.file)];
+        // Corrections are addressed to one branch: an agent reading a sibling branch does not see them.
+        const ownBranch = this.actor.type === 'agent' ? this.session().branchId : undefined;
+        const corrections = ownBranch !== undefined && ownBranch !== branchId ? []
+            : this.store.list<Correction>('correction').filter(c => c.branchId === branchId);
+        return {overview:{branch,sessions,work,files:[...new Map(files.map(f => [JSON.stringify(f),f])).values()],
+            recentActivity:activity,corrections},writes};
     }
-    private signal(workspaceId: string, branchIds: string[], files: FileRef[], evidenceIds: string[], explanation: string, mainEntryId?: string): Conflict {
-        const stable = JSON.stringify([workspaceId,[...branchIds].sort(),files,[...evidenceIds].sort(),mainEntryId]);
+    /** The id depends on what the signal is about, never on its evidence: new evidence for the same
+     *  branches and file updates the signal instead of reopening a decided one under a new id. */
+    private signal(workspaceId: string, basis: string, branchIds: string[], files: FileRef[], evidenceIds: string[], explanation: string, mainEntryId?: string): Conflict {
+        const stable = JSON.stringify([workspaceId,basis,[...branchIds].sort(),files,mainEntryId ?? null]);
         return {id:`conflict:${createHash('sha256').update(stable).digest('hex').slice(0,24)}`,workspaceId,branchIds,files,evidenceIds,explanation,
             ...(mainEntryId ? {mainEntryId} : {}),status:'potential'};
     }
     conflicts(workspaceId: string): Conflict[] {
         const w = this.workspace(workspaceId);
-        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => this.branchOverview(b.id));
+        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => this.overview(b.id));
         const main = this.main(workspaceId);
         const signals: Conflict[] = [];
-        const evidence = (branch: BranchOverview, file: FileRef) => [
-            ...branch.work.filter(w => w.state === 'proposed' && w.files.some(f => f.rootId === file.rootId && f.path === file.path)).map(w => w.id),
-            ...branch.recentActivity.filter(e => extractTouches(e,w.roots).some(t => t.access === 'write' && t.rootId === file.rootId && t.path === file.path)).map(e => e.id),
-        ];
+        const same = (a: FileRef, b: FileRef) => a.rootId === b.rootId && a.path === b.path;
+        const evidence = ({overview, writes}: (typeof branches)[number], file: FileRef) => [...new Set([
+            ...overview.work.filter(w => w.state === 'proposed' && w.files.some(f => same(f,file))).map(w => w.id),
+            ...writes.filter(x => same(x.file,file)).map(x => x.eventId),
+        ])];
         for (let i = 0; i < branches.length; i++) for (const other of branches.slice(i+1)) {
             const branch = branches[i]!;
-            for (const file of branch.files.filter(f => other.files.some(o => f.rootId === o.rootId && f.path === o.path))) {
-                signals.push(this.signal(workspaceId,[branch.branch.id,other.branch.id],[file],[...evidence(branch,file),...evidence(other,file)],
+            for (const file of branch.overview.files.filter(f => other.overview.files.some(o => same(f,o)))) {
+                signals.push(this.signal(workspaceId,'file-overlap',[branch.overview.branch.id,other.overview.branch.id],[file],[...evidence(branch,file),...evidence(other,file)],
                     'Both branches report changes or intentions for this file. Inspect their work; overlap alone does not establish incompatibility.'));
             }
         }
         for (const branch of branches) for (const entry of main.entries) {
-            const files = branch.files.filter(file => entry.files.some(f => f.rootId === file.rootId && f.path === file.path));
-            if (files.length) signals.push(this.signal(workspaceId,[branch.branch.id],files,
-                [...files.flatMap(file => evidence(branch,file)),`${entry.id}:${entry.revision}`],
-                'This branch affects a file referenced by Main. Check the explicit shared expectation; file overlap is only a potential conflict.',entry.id));
+            // One signal per file, so a branch touching one more Main file does not reopen the others.
+            for (const file of branch.overview.files.filter(file => entry.files.some(f => same(f,file)))) {
+                signals.push(this.signal(workspaceId,'main-file',[branch.overview.branch.id],[file],
+                    [...evidence(branch,file),`${entry.id}:${entry.revision}`],
+                    'This branch affects a file referenced by Main. Check the explicit shared expectation; file overlap is only a potential conflict.',entry.id));
+            }
         }
-        for (const branch of branches) for (const work of branch.work.filter(w => w.state === 'proposed')) {
+        for (const branch of branches) for (const work of branch.overview.work.filter(w => w.state === 'proposed')) {
             for (const entryId of work.conflictsWithMain) {
                 const entry = main.entries.find(e => e.id === entryId);
-                if (entry) signals.push(this.signal(workspaceId,[branch.branch.id],work.files,[work.id,`${entry.id}:${entry.revision}`],
+                if (entry) signals.push(this.signal(workspaceId,`explicit:${work.id}`,[branch.overview.branch.id],work.files,[work.id,`${entry.id}:${entry.revision}`],
                     'The agent explicitly reported that this work may conflict with a Main requirement. Human assessment is required.',entryId));
             }
         }

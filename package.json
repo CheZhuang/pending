@@ -11,7 +11,8 @@
     "test": "node --import tsx --test --test-isolation=none packages/core/src/*.test.ts packages/storage/src/*.test.ts packages/sync/src/*.test.ts packages/adapters/src/*.test.ts packages/mcp/src/*.test.ts apps/cli/src/*.test.ts src/*.test.ts demo/*.test.ts",
     "agentree": "node --import tsx apps/cli/src/main.ts",
     "demo": "node --import tsx demo/two-agents.ts",
-    "smoke:native": "node --import tsx demo/native-smoke.ts"
+    "smoke:native": "node --import tsx demo/native-smoke.ts",
+    "demo:real": "node --import tsx demo/real-two-agents.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

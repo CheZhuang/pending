@@ -199,3 +199,69 @@ test('declared files and native activity share canonical identity across nested 
     assert.equal(overlap.status,'potential');
   } finally { store.close(); }
 });
+
+function writer(f: ReturnType<typeof fixture>) {
+  const sessions = f.store.list<{ id: string; branchId: string }>('session');
+  let n = 0;
+  const as = (svc: AgentreeService, branchId: string, path: string, access: 'read' | 'write') => {
+    const session = sessions.find(s => s.branchId === branchId)!;
+    n += 1;
+    svc.ingest({ id: `w-${n}`, workspaceId: f.workspace.id, source: 'native', nativeId: `w-${n}`, sessionId: session.id, type: 'file.changed',
+      mode: 'observed', payload: { touches: [{ rootId: 'repo', path, access }] }, occurredAt: new Date().toISOString() });
+    return `w-${n}`;
+  };
+  return {
+    alice: (path: string, access: 'read' | 'write' = 'write') => as(f.a, f.alice.id, path, access),
+    bob: (path: string, access: 'read' | 'write' = 'write') => as(f.b, f.bob.id, path, access),
+  };
+}
+const overlapOn = (f: ReturnType<typeof fixture>, path: string) =>
+  f.human.conflicts(f.workspace.id).filter(c => c.branchIds.length === 2 && c.files.some(x => x.path === path));
+
+test('a human decision on a file overlap sticks when the same file is edited again', () => {
+  const f = fixture();
+  try {
+    const w = writer(f);
+    w.alice('src/shared.ts'); w.bob('src/shared.ts');
+    const [first] = overlapOn(f, 'src/shared.ts');
+    assert.ok(first);
+    f.human.decideConflict(f.workspace.id, first.id, 'dismissed', 'Different functions in the same file');
+    w.alice('src/shared.ts');
+    const now = overlapOn(f, 'src/shared.ts');
+    assert.equal(now.length, 1, 'no second signal for the same branches and file');
+    assert.equal(now[0]!.id, first.id);
+    assert.equal(now[0]!.status, 'dismissed');
+    // A different file is a different signal and still starts as potential.
+    w.bob('src/other.ts'); w.alice('src/other.ts');
+    assert.equal(overlapOn(f, 'src/other.ts')[0]!.status, 'potential');
+  } finally { f.store.close(); }
+});
+
+test('file overlap evidence does not age out of the recent activity window', () => {
+  const f = fixture();
+  try {
+    const w = writer(f);
+    const a = w.alice('src/shared.ts'); const b = w.bob('src/shared.ts');
+    for (let i = 0; i < 40; i++) w.bob(`docs/${i}.md`, 'read');
+    for (let i = 0; i < 40; i++) w.alice(`notes/${i}.md`, 'read');
+    const [overlap] = overlapOn(f, 'src/shared.ts');
+    assert.ok(overlap, 'still reported after 40 unrelated events per branch');
+    assert.equal(overlap.status, 'potential');
+    assert.ok(overlap.evidenceIds.includes(a) && overlap.evidenceIds.includes(b));
+    assert.equal(f.human.branchOverview(f.bob.id).recentActivity.length, 30, 'the overview window itself is unchanged');
+  } finally { f.store.close(); }
+});
+
+test('agents see only corrections addressed to their own branch', () => {
+  const f = fixture();
+  try {
+    f.human.sendCorrection(f.bob.id, 'Bob: stop editing src/shared.ts');
+    f.human.sendCorrection(f.alice.id, 'Alice: keep protocol v1');
+    assert.deepEqual(f.a.branchOverview(f.bob.id).corrections, [], 'a sibling branch overview hides its corrections');
+    assert.equal(f.a.branchOverview(f.alice.id).corrections.length, 1);
+    const view = f.a.supervision(f.workspace.id);
+    assert.deepEqual(view.corrections.map(c => c.body), ['Alice: keep protocol v1']);
+    assert.deepEqual(view.branches.flatMap(b => b.corrections).map(c => c.body), ['Alice: keep protocol v1']);
+    assert.equal(f.human.branchOverview(f.bob.id).corrections.length, 1, 'humans still see every correction');
+  } finally { f.store.close(); }
+});
