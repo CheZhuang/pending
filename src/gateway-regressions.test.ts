@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -11,10 +11,12 @@ const consoleOrigin = 'http://localhost:5173';
 let directory: string;
 let gateway: ReturnType<typeof createGateway>;
 let baseUrl: string;
+let database: string;
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-gateway-regression-'));
-  gateway = createGateway({ database: join(directory, 'gateway.sqlite'),
+  database = join(directory, 'gateway.sqlite');
+  gateway = createGateway({ database,
     consoleOrigins: [consoleOrigin] });
   baseUrl = await listen();
 });
@@ -86,12 +88,12 @@ test('kill request, exit report, and pending approvals are safe and separately a
   assert.ok(!types.includes('session.ended'));
 });
 
-test('local human routes require no bearer; an explicit legacy bearer is not admin authority', async () => {
+test('anonymous human routes are denied; explicit legacy bearer is not human authority', async () => {
   const workspaces = await fetch(`${baseUrl}/v1/workspaces`);
-  assert.equal(workspaces.status, 200);
+  assert.equal(workspaces.status, 401);
   const legacyBearer = await fetch(`${baseUrl}/v1/workspaces`, { headers: { authorization: `Bearer ${adminToken}` } });
   assert.equal(legacyBearer.status, 401);
-  const consoleOriginResponse = await fetch(`${baseUrl}/v1/workspaces`, { headers: { origin: consoleOrigin } });
+  const consoleOriginResponse = await fetch(`${baseUrl}/v1/workspaces`, { headers: { origin: consoleOrigin, authorization: `Bearer ${(await readFile(`${database}.human-token`, 'utf8')).trim()}` } });
   assert.equal(consoleOriginResponse.status, 200);
   const hostile = await fetch(`${baseUrl}/v1/workspaces`, { headers: { origin: 'https://evil.example' } });
   assert.equal(hostile.status, 403);
@@ -113,7 +115,7 @@ async function registerSession() {
 async function api(path: string, token: string, method = 'GET', data?: unknown): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${token === adminToken ? (await readFile(`${database}.human-token`, 'utf8')).trim() : token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }

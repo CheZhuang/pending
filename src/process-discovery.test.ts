@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -10,6 +10,7 @@ const adminToken = 'process-discovery-admin-token-long-enough';
 let directory: string;
 let baseUrl: string;
 let gateway: ReturnType<typeof createGateway>;
+let database: string;
 let rows: ProcessSnapshot[] = [];
 let scans = 0;
 let releaseInitial!: () => void;
@@ -23,7 +24,8 @@ const provider: ProcessProvider = { enumerate: async () => {
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-process-discovery-'));
-  gateway = createGateway({ database: join(directory, 'gateway.sqlite'), processProvider: provider, discoveryIntervalMs: 60_000 });
+  database = join(directory, 'gateway.sqlite');
+  gateway = createGateway({ database, processProvider: provider, discoveryIntervalMs: 60_000 });
   await new Promise<void>(resolve => gateway.server.listen(0, '127.0.0.1', resolve));
   const address = gateway.server.address();
   assert.ok(address && typeof address !== 'string');
@@ -104,7 +106,7 @@ async function register(runtime: string) {
 async function request(path: string, token = adminToken, method = 'GET', data?: unknown): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${token === adminToken ? (await readFile(`${database}.human-token`, 'utf8')).trim() : token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }

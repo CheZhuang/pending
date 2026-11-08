@@ -73,3 +73,18 @@ test('native event activity remains queryable and usage errors are readable', ()
     assert.equal(f.cli('unknown').code, 2);
   } finally { f.close(); }
 });
+
+test('managed session identity environment cannot be overridden with --as', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agentree-managed-cli-'));
+  try {
+    const out: string[] = [], err: string[] = [];
+    const code = run(['--as', 'another-session', 'status'], {
+      out: text => out.push(text), err: text => err.push(text),
+      env: { AGENTREE_HOME: home, AGENTREE_USER: 'reviewer', HARNESS_SESSION_ID: 'managed-session', HARNESS_SESSION_TOKEN: 'managed-token' },
+      cwd: '/repo',
+    });
+    assert.equal(code, 3);
+    assert.match(err.join('\n'), /managed session/i);
+    assert.deepEqual(out, []);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
