@@ -7,12 +7,7 @@ import { CodexAppServerAdapter } from './codex-app-server.js';
 import { runManagedClaude } from './claude-launcher.js';
 import { handleClaudePreToolHook } from './claude-pre-tool-hook.js';
 import { MockGatewayClient } from './mock.js';
-import { SqliteStore } from '../../storage/src/index.js';
-import { AgentreeService } from '../../core/src/index.js';
-import { createAgentreeMcpServer } from '../../mcp/src/index.js';
-import { extractTouches, MemoryLedger } from '../../sync/src/index.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { extractTouches } from '../../sync/src/index.js';
 
 const fakeRpc = `
 const send = x => console.log(JSON.stringify(x));
@@ -116,24 +111,4 @@ test('Claude launcher responds to session.kill-requested and reports observed ch
   assert.equal(exit,0);
   assert.deepEqual(reported,{exitCode:0,signal:null});
  }finally{await rm(dir,{recursive:true,force:true});}
-});
-
-test('MCP sync delivers merged context from a peer branch',async()=>{
- const store=new SqliteStore(':memory:');
- const admin=new AgentreeService(store,{type:'human',id:'reviewer'});
- const w=admin.createWorkspace('review');const target=admin.createBranch(w.id,'target');const source=admin.createBranch(w.id,'source');
- const ts=admin.registerSession(target.id,{id:'t',name:'target'},'mock','tn');const ss=admin.registerSession(source.id,{id:'s',name:'source'},'mock','sn');
- const t=new AgentreeService(store,{type:'agent',sessionId:ts.id});const s=new AgentreeService(store,{type:'agent',sessionId:ss.id});
- for(let i=0;i<2;i++)t.publish(target.id,{kind:'finding',key:'t'+i,body:'target',scope:{type:'workspace'}});
- const incoming=s.publish(source.id,{kind:'finding',key:'incoming',body:'merged',scope:{type:'workspace'}});
- admin.applyMerge(admin.createMerge(source.id,target.id,[incoming.id],2).id);
- const server=createAgentreeMcpServer({session:ts,service:t,ledger:new MemoryLedger()});const client=new Client({name:'regression',version:'1'});
- const [ct,st]=InMemoryTransport.createLinkedPair();
- try {
-  await server.connect(st);await client.connect(ct);
-  await client.callTool({name:'context_subscribe',arguments:{scopes:[{type:'workspace'}]}});
-  const result=await client.callTool({name:'context_sync',arguments:{requestId:'merged-context'}});
-  const data=(result.structuredContent as {data:{items:{commitId:string}[]}}).data;
-  assert.deepEqual(data.items.map(c=>c.commitId),[incoming.id]);
- }finally{await client.close();await server.close();store.close();}
 });

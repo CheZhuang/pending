@@ -3,7 +3,7 @@
 import { computed, h, ref, watch } from 'vue';
 import { NCard, NDataTable, NDescriptions, NDescriptionsItem, NDrawer, NDrawerContent, NInput, NSelect, NSpace, NSwitch, NTag } from 'naive-ui';
 import { api } from '../api/index.js';
-import { eventSummary, eventTone, short, time, dateTime } from '../format.js';
+import { eventEvidence, eventSummary, eventTone, short, time, dateTime } from '../format.js';
 import { sessionLabel } from '../model.js';
 import { state } from '../state.js';
 import { useData } from '../useData.js';
@@ -17,7 +17,7 @@ const CATEGORIES = [
   { label: 'Observed agent activity', value: 'observed' },
   { label: 'Policy decisions', value: 'policy' },
   { label: 'Tool approvals', value: 'tool' },
-  { label: 'Context & merges', value: 'context' },
+  { label: 'Main & supervision', value: 'context' },
   { label: 'Sessions', value: 'session' },
 ];
 const match = {
@@ -25,7 +25,7 @@ const match = {
   observed: (e) => e.mode === 'observed',
   policy: (e) => e.type === 'policy.decision',
   tool: (e) => e.type.startsWith('tool.'),
-  context: (e) => e.type.startsWith('context.') || e.type.startsWith('merge.') || e.type.startsWith('review.'),
+  context: (e) => /^(context|main|work|merge|conflict|correction)\./.test(e.type),
   session: (e) => e.type.startsWith('session.') || e.type === 'branch.created' || e.type === 'workspace.created',
 };
 
@@ -64,8 +64,8 @@ const columns = [
   },
   { title: 'Summary', key: 'summary', ellipsis: { tooltip: true }, render: (e) => eventSummary(e) },
   {
-    title: 'Mode', key: 'mode', width: 100,
-    render: (e) => h('span', { class: 'muted', style: 'font-size:12px' }, e.mode === 'observed' ? 'observed' : 'gateway'),
+    title: 'Evidence', key: 'mode', width: 180,
+    render: (e) => h('span', { class: 'muted', style: 'font-size:12px' }, eventEvidence(e)),
   },
 ];
 const rowProps = (e) => ({ style: 'cursor: pointer', onClick: () => { selected.value = e; } });
@@ -95,7 +95,7 @@ const rowProps = (e) => ({ style: 'cursor: pointer', onClick: () => { selected.v
       <NDrawerContent v-if="selected" :title="`#${selected.sequence} · ${selected.type}`" closable>
         <NDescriptions :column="1" label-placement="left" size="small" bordered>
           <NDescriptionsItem label="Summary">{{ eventSummary(selected) }}</NDescriptionsItem>
-          <NDescriptionsItem label="Mode">{{ selected.mode === 'observed' ? 'observed (reported by an adapter)' : 'controlled (written by the gateway)' }}</NDescriptionsItem>
+          <NDescriptionsItem label="Evidence">{{ eventEvidence(selected) }}</NDescriptionsItem>
           <NDescriptionsItem label="Who">{{ who(selected) }}</NDescriptionsItem>
           <NDescriptionsItem label="Source"><span class="mono">{{ selected.source }}</span></NDescriptionsItem>
           <NDescriptionsItem label="Native id"><span class="mono">{{ selected.nativeId }}</span></NDescriptionsItem>

@@ -27,6 +27,15 @@ deterministic fallback with simulated agents.
 
 **Not verified yet:** a real Claude Code run with Agentree MCP (B's Codex smoke passed; the Claude smoke
 `npm run smoke:native -- claude` still needs a machine with Claude Code), and `npm run demo:real` end to end.
+| Joins a workspace as a governed session | ✅ `demo/managed-claude.mjs` (B's launcher) | ❌ no launcher host yet |
+| Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ❌ approvals not routed (adapter declines them) |
+| Live traffic in the console and CLI | ✅ one record per tool call (policy, pending, decision) | ❌ until a host pushes App Server events |
+| Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ❌ |
+| Retrieve Main / corrections and propose branch work (MCP tools) | ✅ session-bound host is configured | ✅ session-bound host is configured |
+
+For the **supervision loop** (Main, proposed work, explicit conflict evidence and human correction) use
+`npm run demo`. It runs the same sync, MCP, gateway and CLI code with two simulated agents (see `README.md`).
+The gaps above and who owns them are listed at the end.
 
 ---
 
@@ -165,6 +174,8 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 5. `npm run agentree -- log --audit`: the auditable record of every decision.
 6. Then the multi-agent part: `npm run demo:real` (section 9) with Claude Code and Codex together, shown on the
    console's **Reviews** and **Context** pages. Fallback: `npm run demo` with simulated agents.
+6. Then `npm run demo` for the multi-agent part: current Main, branch proposals,
+   the conflict signal, and a human acceptance/correction.
 
 ---
 
@@ -230,3 +241,14 @@ anything to a model.
 
 The real models may not follow the prompts exactly. Rehearse once, record the successful run as a backup
 video, and keep `npm run demo` as the fallback.
+## Missing for the full real-agent loop
+
+1. **Codex launcher host (B).**
+   - Register a `codex` session (`POST /v1/sessions`).
+   - Start `CodexAppServerAdapter.start({ cwd })` and `startTurn(prompt)`.
+   - Push `readEvents` batches to `POST /v1/events` with the session token, saving the cursor in `SqliteCursorStore`.
+   - Map Stop to `interruptTurn` / `close`.
+
+   Codex tool approvals are not intercepted; the gateway does not claim to control them.
+3. **Claude transcript observation (B).** Ingest Claude Code's session JSONL so messages and non-tool activity
+   show up too. Today only hook-gated tool calls are recorded.

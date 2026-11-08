@@ -125,22 +125,29 @@ async function waitForNewApproval(sessionId: string, previousId: string): Promis
   return waitForPending(sessionId, previousId);
 }
 
-test('HTTP context publication, reviewed merge, and resumable SSE', async () => {
+test('HTTP Main, branch work, human acceptance, and resumable SSE', async () => {
   const s = await registerSession() as Awaited<ReturnType<typeof registerSession>> & {branchId:string};
-  const workspace = await (await request(`/v1/workspaces/${s.workspaceId}`, adminToken)).json() as {mainBranchId:string};
-  const published = await request(`/v1/branches/${s.branchId}/context`, s.sessionToken, 'POST', {
-    knowledge:{kind:'finding',key:'integration',body:'Shared context',scope:{type:'workspace'}},
+  const mainPath=`/v1/workspaces/${s.workspaceId}/main`;
+  const initial=await (await request(mainPath,adminToken)).json() as {revision:number;entries:unknown[]};
+  assert.equal(initial.revision,0);
+  assert.equal((await request(mainPath,s.sessionToken,'POST',{body:'agent cannot edit',expectedRevision:0})).status,403);
+  const proposed=await request(`/v1/branches/${s.branchId}/work`,s.sessionToken,'POST',{body:'Shared context',files:[]});
+  assert.equal(proposed.status,201);
+  const work=await proposed.json() as {id:string};
+  const overview=await (await request(`/v1/branches/${s.branchId}/work`,s.sessionToken)).json() as {work:{id:string}[]};
+  assert.ok(overview.work.some(item=>item.id===work.id));
+  const accepted=await request(`/v1/branches/${s.branchId}/merge`,adminToken,'POST',{
+    workIds:[work.id],decision:'accepted',expectedMainRevision:0,
   });
-  assert.equal(published.status,201);
-  const commit = await published.json() as {id:string};
-  const snapshot = await (await request(`/v1/branches/${s.branchId}/context`,s.sessionToken)).json() as {knowledge:{id:string}[]};
-  assert.ok(snapshot.knowledge.some(c=>c.id===commit.id));
-  const merge = await (await request('/v1/merges',s.sessionToken,'POST',{
-    sourceBranchId:s.branchId,targetBranchId:workspace.mainBranchId,commitIds:[commit.id],expectedRevision:0,
-  })).json() as {id:string;reviewId:string};
-  assert.equal((await request(`/v1/merges/${merge.id}/apply`,s.sessionToken,'POST')).status,409);
-  assert.equal((await request(`/v1/reviews/${merge.reviewId}`,adminToken,'POST',{decision:'approved'})).status,200);
-  assert.equal((await request(`/v1/merges/${merge.id}/apply`,s.sessionToken,'POST')).status,200);
+  assert.equal(accepted.status,201);
+  const updated=await (await request(mainPath,adminToken)).json() as {revision:number;entries:Array<{body:string;sourceWorkId:string}>};
+  assert.equal(updated.revision,1);
+  assert.equal(updated.entries[0]?.body,'Shared context');
+  assert.equal(updated.entries[0]?.sourceWorkId,work.id);
+  const stale=await request(`/v1/branches/${s.branchId}/merge`,adminToken,'POST',{
+    workIds:[work.id],decision:'accepted',expectedMainRevision:0,
+  });
+  assert.equal(stale.status,409);
   const origin = await fetch(`${baseUrl}/v1/approvals`,{headers:{authorization:`Bearer ${adminToken}`,origin:'https://untrusted.example'}});
   assert.equal(origin.status,403);
   const stream = await fetch(`${baseUrl}/v1/stream?after=0`,{headers:{authorization:`Bearer ${s.sessionToken}`},signal:AbortSignal.timeout(3000)});
@@ -151,4 +158,53 @@ test('HTTP context publication, reviewed merge, and resumable SSE', async () => 
   await reader.cancel();
   assert.equal((await request(`/v1/sessions/${s.sessionId}/kill`,adminToken,'POST')).status,202);
   assert.equal((await request(`/v1/sessions/${s.sessionId}`,s.sessionToken)).status,403);
+});
+
+test('Main history, conflicts, and corrections use authenticated human routes', async()=>{
+  const s=await registerSession() as Awaited<ReturnType<typeof registerSession>>&{branchId:string};
+  const mainPath=`/v1/workspaces/${s.workspaceId}/main`;
+  const before=await (await request(mainPath,adminToken)).json() as {revision:number};
+  const first=await request(mainPath,adminToken,'POST',{body:'Initial guidance',files:[],expectedRevision:before.revision});
+  assert.equal(first.status,201);
+  const entry=await first.json() as {id:string};
+  const update=await request(`${mainPath}/${entry.id}`,adminToken,'POST',{body:'Updated guidance',files:[],expectedRevision:before.revision+1});
+  assert.equal(update.status,200);
+  const history=await request(`${mainPath}/${entry.id}/history`,adminToken);
+  assert.equal((await history.json() as unknown[]).length,2);
+  const correction=await request(`/v1/branches/${s.branchId}/corrections`,adminToken,'POST',{body:'Please re-read Main'});
+  assert.equal(correction.status,201);
+  const overview=await request(`/v1/branches/${s.branchId}/work`,s.sessionToken);
+  assert.equal(overview.status,200);
+  assert.ok(((await overview.json()) as {corrections:Array<{body:string}>}).corrections.some(c=>c.body==='Please re-read Main'));
+  const reported=await request(`/v1/workspaces/${s.workspaceId}/conflicts`,adminToken,'POST',{
+    branchIds:[s.branchId],explanation:'Human reported a review concern',
+  });
+  assert.equal(reported.status,201);
+  const conflict=await reported.json() as {id:string;status:string};
+  assert.equal(conflict.status,'potential');
+  const decided=await request(`/v1/workspaces/${s.workspaceId}/conflicts/${conflict.id}`,adminToken,'POST',{
+    status:'confirmed',explanation:'Reviewed and confirmed',
+  });
+  assert.equal((await decided.json() as {status:string}).status,'confirmed');
+  assert.equal((await request(`/v1/workspaces/${s.workspaceId}/conflicts/${conflict.id}`,s.sessionToken,'POST',{
+    status:'dismissed',explanation:'agent attempt',
+  })).status,403);
+  assert.equal((await request(`/v1/branches/${s.branchId}/corrections`,s.sessionToken,'POST',{body:'agent attempt'})).status,403);
+});
+
+test('HTTP text-only Main edit keeps file references; an explicit empty list clears them', async () => {
+  const s = await registerSession();
+  const workspace = await (await request(`/v1/workspaces/${s.workspaceId}`, adminToken)).json() as { roots: Array<{ id: string }> };
+  const rootId = workspace.roots[0]!.id;
+  const mainPath = `/v1/workspaces/${s.workspaceId}/main`;
+  const revision = async () => ((await (await request(mainPath, adminToken)).json()) as { revision: number }).revision;
+  const created = await (await request(mainPath, adminToken, 'POST', { body: 'Tokens expire after 15 minutes', files: [{ rootId, path: 'src/auth/token.ts' }], expectedRevision: await revision() })).json() as { id: string; files: unknown[] };
+  assert.equal(created.files.length, 1);
+  const textOnly = await request(`${mainPath}/${created.id}`, adminToken, 'POST', { body: 'Tokens expire after 30 minutes', expectedRevision: await revision() });
+  assert.equal(textOnly.status, 200);
+  const kept = await textOnly.json() as { body: string; files: unknown[] };
+  assert.equal(kept.body, 'Tokens expire after 30 minutes');
+  assert.equal(kept.files.length, 1, 'omitting files keeps the existing references');
+  const cleared = await (await request(`${mainPath}/${created.id}`, adminToken, 'POST', { body: 'Tokens expire after 30 minutes', files: [], expectedRevision: await revision() })).json() as { files: unknown[] };
+  assert.equal(cleared.files.length, 0, 'an explicit empty list clears them');
 });

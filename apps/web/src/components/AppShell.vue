@@ -18,16 +18,14 @@ const collapsed = ref(narrow());
 window.addEventListener('resize', () => { if (narrow()) collapsed.value = true; });
 watch(() => route.fullPath, () => { if (narrow()) collapsed.value = true; });
 
-const pendingReviews = computed(() => state.changed.reviews); // touch so the menu re-renders on review events
-const menu = computed(() => {
-  void pendingReviews.value;
-  return [
-    { key: 'overview', label: () => h(RouterLink, { to: '/' }, () => 'Overview') },
+const menu = computed(() => [
+    { key: 'overview', label: () => h(RouterLink, { to: '/overview' }, () => 'Overview') },
+    { key: 'main', label: () => h(RouterLink, { to: '/main' }, () => 'Main') },
+    { key: 'branches', label: () => h(RouterLink, { to: '/branches' }, () => 'Branches') },
+    { key: 'conflicts', label: () => h(RouterLink, { to: '/conflicts' }, () => 'Conflicts') },
     { key: 'activity', label: () => h(RouterLink, { to: '/activity' }, () => 'Activity') },
-    { key: 'reviews', label: () => h(RouterLink, { to: '/reviews' }, () => 'Reviews') },
-    { key: 'context', label: () => h(RouterLink, { to: '/context' }, () => 'Context') },
-  ];
-});
+    { key: 'approvals', label: () => h(RouterLink, { to: '/approvals' }, () => 'Approvals') },
+]);
 
 const workspaceOptions = computed(() => state.workspaces.map((w) => ({ label: w.name, value: w.id })));
 

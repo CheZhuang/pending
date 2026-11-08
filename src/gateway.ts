@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { AgentreeService } from '../packages/core/src/index.js';
-import { DomainError, type Session, type Workspace } from '../packages/contracts/src/index.js';
+import { DomainError, mainInputSchema, workInputSchema, type Session, type Workspace } from '../packages/contracts/src/index.js';
 export interface GatewayOptions {
     database: string;
     adminToken: string;
@@ -284,8 +284,8 @@ export function createGateway(options: GatewayOptions) {
                     return send(svc.branches(wid));
                 if (method === 'POST' && workspaceRoute[2] === 'branches') {
                     human();
-                    const b = z.object({ name: text, restricted: z.boolean().optional() }).parse(await body(req));
-                    return send(admin.createBranch(wid, b.name, b.restricted), 201);
+                    const b = z.object({ name: text }).parse(await body(req));
+                    return send(admin.createBranch(wid, b.name), 201);
                 }
                 if (method === 'GET' && workspaceRoute[2] === 'events')
                     return send(svc.events(wid, { afterSequence: Number(url.searchParams.get('after') ?? 0), limit: Number(url.searchParams.get('limit') ?? 100) }));
@@ -330,34 +330,49 @@ export function createGateway(options: GatewayOptions) {
                 res.on('close', () => { clearInterval(interval); clearInterval(heartbeat); streams.delete(res); });
                 return;
             }
-            const contextRoute = path.match(/^\/v1\/branches\/([^/]+)\/context$/);
-            if (contextRoute) {
-                if (method === 'GET')
-                    return send(svc.snapshot(contextRoute[1]));
-                if (method === 'POST') {
-                    const b = z.object({ knowledge: z.unknown(), eventIds: z.array(text).optional(), expected: z.object({ branchRevision: z.number(), mainRevision: z.number() }).optional() }).parse(await body(req));
-                    return send(svc.publish(contextRoute[1], b.knowledge as Parameters<typeof svc.publish>[1], b.eventIds, b.expected), 201);
+            const mainRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/main(?:\/([^/]+)(?:\/(history))?)?$/);
+            if (mainRoute) {
+                const [,wid,entryId,history] = mainRoute;
+                if (method === 'GET') return send(history && entryId ? svc.mainHistory(wid!,entryId) : svc.main(wid!));
+                if (method === 'POST' && !history) {
+                    human();
+                    const raw = await body(req);
+                    const b = mainInputSchema.extend({expectedRevision:z.number().int().min(0),remove:z.boolean().optional()}).parse(raw);
+                    // The schema defaults files to []; only forward files the client actually sent,
+                    // so a text-only edit keeps the entry's file references (core keeps them when omitted).
+                    const sentFiles = typeof raw === 'object' && raw !== null && 'files' in raw;
+                    const input = sentFiles ? {body:b.body,files:b.files} : {body:b.body};
+                    return send(admin.editMain(wid!,input,b.expectedRevision,entryId,b.remove),entryId ? 200 : 201);
                 }
             }
-            if (path === '/v1/merges' && method === 'POST') {
-                const b = z.object({ sourceBranchId: text, targetBranchId: text, commitIds: z.array(text), expectedRevision: z.number(), expectedMainRevision: z.number().optional() }).parse(await body(req));
-                return send(svc.createMerge(b.sourceBranchId, b.targetBranchId, b.commitIds, b.expectedRevision, b.expectedMainRevision), 201);
-            }
-            if ((path === '/v1/merges' || path === '/v1/reviews') && method === 'GET') {
-                human();
-                return send(store.list(path.endsWith('merges') ? 'merge' : 'review'));
-            }
-            const mergeRoute = path.match(/^\/v1\/merges\/([^/]+)\/apply$/);
-            if (mergeRoute && method === 'POST')
-                return send(svc.applyMerge(mergeRoute[1]));
-            const reviewRoute = path.match(/^\/v1\/reviews\/([^/]+)$/);
-            if (reviewRoute) {
-                if (method === 'GET')
-                    return send(svc.review(reviewRoute[1]));
-                if (method === 'POST') {
+            const supervisionRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/(supervision|conflicts|merges)(?:\/([^/]+))?$/);
+            if (supervisionRoute) {
+                const [,wid,kind,conflictId] = supervisionRoute;
+                if (method === 'GET' && !conflictId) return send(kind === 'supervision' ? svc.supervision(wid!) : kind === 'conflicts' ? svc.conflicts(wid!) : svc.merges(wid!));
+                if (method === 'POST' && kind === 'conflicts') {
                     human();
-                    const b = z.object({ decision: z.enum(['approved', 'rejected']), resolutions: z.array(z.object({ existingCommitId: text, incomingCommitId: text, selectedCommitId: text })).optional() }).parse(await body(req));
-                    return send(svc.resolveReview(reviewRoute[1], b.decision, b.resolutions));
+                    if (conflictId) {
+                        const b = z.object({status:z.enum(['potential','confirmed','resolved','dismissed']),explanation:text}).parse(await body(req));
+                        return send(admin.decideConflict(wid!,conflictId,b.status,b.explanation));
+                    }
+                    const b = z.object({branchIds:z.array(text).min(1),mainEntryId:text.optional(),explanation:text}).parse(await body(req));
+                    return send(admin.reportConflict(wid!,b),201);
+                }
+            }
+            const branchRoute = path.match(/^\/v1\/branches\/([^/]+)\/(work|corrections|merge)$/);
+            if (branchRoute) {
+                const [,branchId,kind] = branchRoute;
+                if (method === 'GET' && kind === 'work') return send(svc.branchOverview(branchId!));
+                if (method === 'POST' && kind === 'work') return send(svc.proposeWork(branchId!,workInputSchema.parse(await body(req))),201);
+                if (method === 'POST' && kind === 'corrections') {
+                    human();
+                    const b = z.object({body:text}).parse(await body(req));
+                    return send(admin.sendCorrection(branchId!,b.body),201);
+                }
+                if (method === 'POST' && kind === 'merge') {
+                    human();
+                    const b = z.object({workIds:z.array(text).min(1),decision:z.enum(['accepted','rejected']),expectedMainRevision:z.number().int().min(0)}).parse(await body(req));
+                    return send(admin.decideMerge(branchId!,b.workIds,b.decision,b.expectedMainRevision),201);
                 }
             }
             send({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404);

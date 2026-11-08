@@ -1,42 +1,32 @@
-# agentree CLI (Task C)
+# agentree CLI
 
-Human-facing CLI for inspecting agent activity and governing context merges.
-No GUI. Every command takes `--json` (`{ ok, data }` or `{ ok: false, error: { code, message, hint } }`).
+Human-facing supervision controls and read-only native activity inspection.
+Every command supports `--json`; writes go through `AgentreeService` and are
+authorized and audited.
 
-```bash
-npm run agentree -- --help          # requires Node 24+
+```sh
+npm run agentree -- --help
 ```
 
-The CLI reads and writes **the same SQLite file as the gateway daemon** (`npm start`):
-`$GATEWAY_DATA_DIR/gateway.sqlite`, by default `~/.local/share/agentree/gateway.sqlite` on macOS and Linux,
-never the project directory. So the CLI, the gateway and the web console all see the same workspaces,
-sessions, events and reviews, even while the gateway is running (SQLite WAL). Override with
-`AGENTREE_HOME=<dir>` or `--db <path>`. The human identity is `AGENTREE_USER` or the OS user name.
-
-## Commands
+The CLI uses the same SQLite file as the Gateway (`$GATEWAY_DATA_DIR/gateway.sqlite`,
+or `~/.local/share/agentree/gateway.sqlite`). Override it with `AGENTREE_HOME`
+or `--db <path>`.
 
 | Area | Commands |
 | --- | --- |
-| Workspace | `init <name> [--root id=path]`, `workspace [show\|list\|use]`, `status` |
-| Agents | `branch list\|create`, `session list\|register` |
-| History | `log [--session] [--type] [--audit] [--after] [--limit]`, `context <branch> [--history]` |
-| Relevance | `relevant <session> [--level] [--budget] [--fresh]`: preview the next sync without delivering it |
-| Review | `merge list\|show\|create\|apply`, `review list\|show\|approve\|reject\|resolve` |
+| Workspace | `init`, `workspace show/list/use`, `status` |
+| Native sessions | `branch list/create/show`, `session list/register`, `log` |
+| Main | `main [show]`, `main add/edit/remove`, `main history` |
+| Work | `work list/accept/reject <branch>`, `merge list` |
+| Conflicts | `conflict list`, `conflict decide <id> <status> <explanation>` |
+| Corrections | `correction send <branch> <body>` |
 
-`review resolve <id> --keep incoming|existing` or `--pick <n>=existing|incoming` picks a side for each
-conflict. Approve and resolve apply the merge immediately unless `--no-apply` is given.
+Branches are logical supervision records, not Git branches. Human acceptance
+copies selected work text into Main and records its source work ID; it never
+changes source files or invokes Git. File overlap creates only a potential
+conflict. Humans record conflict decisions and explanations. Agent context
+retrieval and acknowledgment do not show that the agent followed guidance.
 
-## Authorization
-
-All writes go through A's `AgentreeService`, so the gateway authorizes and audits them. The CLI
-never writes SQLite directly. `--as <session>` acts as a registered agent session (for demos and
-tests). For example, `agentree --as x-1 review approve <id>` is refused by the gateway, exits with
-code 3, and is recorded as `policy.decision … DENY` in `agentree log`.
-
-Exit codes: `0` ok · `1` failure · `2` usage · `3` not authorized · `4` not found · `5` stale or conflicting state.
-
-## Known gap (needs A)
-
-`ApplicationService` has no list methods for workspaces, sessions, merges or reviews yet. Until it
-does, `gateway.ts` reads them from the entity table. Those reads are read-only and run only after an
-authorized `workspace()` read. They are marked `TODO(A)` so they can be swapped for real service methods.
+`--as <session>` is a development/testing affordance for session identity.
+Human Main, conflict and acceptance operations are denied to agents and appear
+in the audit log.
