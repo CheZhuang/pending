@@ -1,17 +1,24 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { NAlert, NButton, NCard, NEmpty, NInput, NSelect, NSpace, NTag, useMessage } from 'naive-ui';
 import { api } from '../api/index.js';
 import { describe } from '../api/errors.js';
 import { state } from '../state.js';
 import { useData } from '../useData.js';
 import { dateTime, eventEvidence, short } from '../format.js';
+import BranchGraph from '../components/BranchGraph.vue';
 
 const message = useMessage();
 const { data, error, reload } = useData(() => api.supervision(state.workspaceId), () => [state.workspaceId, state.changed.context, state.changed.sessions, state.changed.supervision]);
-const selected = ref(null); const correction = ref(''); const busy = ref(false);
+const selected = ref(null); const selectedWork = ref(null); const correction = ref(''); const busy = ref(false);
 const branches = computed(() => data.value?.branches ?? []);
 const current = computed(() => branches.value.find(x => x.branch.id === selected.value) ?? branches.value[0] ?? null);
+async function selectFromTree({ branchId, workId }) {
+  selected.value = branchId; selectedWork.value = workId;
+  if (!workId) return;
+  await nextTick();
+  document.getElementById(`work-${workId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 async function disposition(work, decision) {
   if (!current.value) return;
   busy.value = true;
@@ -33,7 +40,10 @@ async function sendCorrection() {
     <h1 class="page-title">Branches</h1>
     <p class="page-sub">Logical agent work records, independent of Git branches and filesystem layout. Review proposed work before accepting it into Main.</p>
     <NAlert v-if="error" type="error" :title="describe(error).title">{{ describe(error).hint }}</NAlert>
-    <NSelect v-if="branches.length" :value="current?.branch.id" @update:value="(v) => (selected = v)" :options="branches.map(x => ({ label: `${x.branch.name} · ${x.work.filter(w => w.state === 'proposed').length} proposed`, value: x.branch.id }))" style="max-width: 360px; margin-bottom: 14px" />
+    <NCard v-if="branches.length" title="Branch tree" size="small" style="margin-bottom: 14px">
+      <BranchGraph :context="data" :selected-branch-id="current?.branch.id" :selected-work-id="selectedWork" @select="selectFromTree" />
+    </NCard>
+    <NSelect v-if="branches.length" :value="current?.branch.id" @update:value="(v) => { selected = v; selectedWork = null; }" :options="branches.map(x => ({ label: `${x.branch.name} · ${x.work.filter(w => w.state === 'proposed').length} proposed`, value: x.branch.id }))" style="max-width: 360px; margin-bottom: 14px" />
     <template v-if="current">
       <NCard size="small" style="margin-bottom: 14px">
         <template #header>{{ current.branch.name }} <span class="muted">· revision {{ current.branch.revision }}</span></template>
@@ -43,7 +53,7 @@ async function sendCorrection() {
       </NCard>
       <h2 class="section-title">Proposed work</h2>
       <NEmpty v-if="!current.work.length" description="No work proposals on this branch yet." />
-      <NCard v-for="work in [...current.work].reverse()" :key="work.id" size="small" style="margin-bottom: 10px">
+      <NCard v-for="work in [...current.work].reverse()" :id="`work-${work.id}`" :key="work.id" size="small" style="margin-bottom: 10px" :class="{ 'work-selected': work.id === selectedWork }">
         <template #header>{{ work.intent || 'Work proposal' }} <NTag size="tiny" :type="work.state === 'proposed' ? 'warning' : work.state === 'accepted' ? 'success' : 'default'" :bordered="false">{{ work.state }}</NTag></template>
         <p class="work-body">{{ work.body }}</p>
         <NSpace v-if="work.files?.length" size="small"><NTag v-for="f in work.files" :key="f.rootId + f.path" size="small" class="mono">{{ f.rootId }}:{{ f.path }}</NTag></NSpace>
@@ -65,4 +75,4 @@ async function sendCorrection() {
   </div>
 </template>
 
-<style scoped>.section-title { font-size: 15px; margin: 18px 0 10px; }.work-body { white-space: pre-wrap; line-height: 1.55; }.correction { padding: 8px 0; border-bottom: 1px solid #414559; white-space: pre-wrap; }.event-line { padding: 6px 0; border-bottom: 1px solid #414559; font-size: 12px; }</style>
+<style scoped>.section-title { font-size: 15px; margin: 18px 0 10px; }.work-body { white-space: pre-wrap; line-height: 1.55; }.correction { padding: 8px 0; border-bottom: 1px solid #414559; white-space: pre-wrap; }/* highlight the proposal picked in the tree */ .work-selected { border-color: #babbf1; box-shadow: 0 0 0 1px #babbf166; }.event-line { padding: 6px 0; border-bottom: 1px solid #414559; font-size: 12px; }</style>
