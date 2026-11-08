@@ -13,6 +13,7 @@ import { EntityLedger } from '../packages/sync/src/ledger.js';
 import { collectConflictEvidence } from './conflict-evidence.js';
 import { ProcessDiscovery, sameProcess, type ProcessProvider, type ManagedProcessBinding } from '../packages/adapters/src/process-discovery.js';
 import { LocalProcessProvider } from '../packages/adapters/src/process-platform.js';
+import { ensureLocalHumanToken } from '../packages/adapters/src/local-auth.js';
 export interface GatewayOptions {
     database: string;
     consoleDirectory?: string;
@@ -39,6 +40,9 @@ function decodeMainSegment(value: string): string {
 }
 /** Local daemon boundary: HTTP input never supplies a Core actor. */
 export function createGateway(options: GatewayOptions) {
+    const humanHash = digest(ensureLocalHumanToken(options.database));
+    const consoleTickets = new Map<string, number>();
+    const consoleSessions = new Map<string, number>();
     const store = new SqliteStore(options.database);
     const admin = new AgentreeService(store, { type: 'human', id: 'local-admin' });
     store.db.exec(`CREATE TABLE IF NOT EXISTS gateway_credentials (hash TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
@@ -142,6 +146,7 @@ export function createGateway(options: GatewayOptions) {
         const send = (data: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)); };
         res.setHeader('X-Frame-Options', 'DENY');
         res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+        res.setHeader('Referrer-Policy', 'no-referrer');
         try {
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
@@ -159,9 +164,9 @@ export function createGateway(options: GatewayOptions) {
                 throw new DomainError('DENY', 'Cross-site requests require an allowed Origin');
             if (!origin && req.headers['sec-fetch-site'] && method !== 'GET' && method !== 'HEAD')
                 throw new DomainError('DENY', 'Browser writes require an Origin');
-            if (path === '/health' && method === 'GET') return send({ status: 'ok', application: 'agentree', database: resolve(options.database) });
             if (origin) {
                 res.setHeader('Access-Control-Allow-Origin', origin);
+                res.setHeader('Access-Control-Allow-Credentials', 'true');
                 res.setHeader('Vary', 'Origin');
             }
             if (method === 'OPTIONS' && origin) {
@@ -171,12 +176,29 @@ export function createGateway(options: GatewayOptions) {
                 res.end();
                 return;
             }
+            if (path === '/health' && method === 'GET') return send({ status: 'ok', application: 'agentree', database: resolve(options.database) });
             const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '';
+            // A ticket is a short-lived, one-use capability passed in a launcher URL
+            // fragment. No GET or ordinary anonymous request can mint one.
+            if (path === '/v1/console-session' && method === 'POST') {
+                if (req.headers.authorization) return send({error:{code:'UNAUTHORIZED',message:'Use a Console ticket'}},401);
+                const b = z.object({ticket:text}).parse(await body(req));
+                const key = digest(b.ticket);
+                const deadline = consoleTickets.get(key);
+                consoleTickets.delete(key);
+                if (!deadline || deadline <= Date.now()) return send({error:{code:'UNAUTHORIZED',message:'Invalid or expired Console ticket'}},401);
+                const cookie = randomBytes(32).toString('hex');
+                consoleSessions.set(digest(cookie), Date.now() + 12 * 60 * 60 * 1000);
+                res.setHeader('Set-Cookie', `agentree_console=${cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`);
+                return send({ok:true});
+            }
             const credential = token ? store.db.prepare('SELECT session_id FROM gateway_credentials WHERE hash=?').get(digest(token)) : undefined;
-            if (req.headers.authorization && !credential)
-                return send({ error: { code: 'UNAUTHORIZED', message: 'Invalid session credential' } }, 401);
-            const isAdmin = !req.headers.authorization;
-            const sid = isAdmin ? undefined : String(credential!.session_id);
+            const cookie = req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('agentree_console='))?.slice('agentree_console='.length);
+            const isAdmin = req.headers.authorization !== undefined ? !!token && digest(token) === humanHash
+                : !!cookie && (consoleSessions.get(digest(cookie)) ?? 0) > Date.now();
+            if (path.startsWith('/v1/') && !isAdmin && !credential)
+                return send({ error: { code: 'UNAUTHORIZED', message: 'Gateway credential required' } }, 401);
+            const sid = credential ? String(credential.session_id) : undefined;
             if (sid && !(/^\/v1\/sessions\/[^/]+\/end$/.test(path) || path === '/v1/stream'))
                 active(sid);
             const svc = sid ? new AgentreeService(store, { type: 'agent', sessionId: sid }) : admin;
@@ -189,6 +211,15 @@ export function createGateway(options: GatewayOptions) {
                     throw new DomainError('DENY', 'Session credential mismatch');
                 return session(id);
             };
+            if (path === '/v1/console-ticket' && method === 'POST') {
+                human();
+                const now = Date.now();
+                for (const [key, deadline] of consoleTickets) if (deadline <= now) consoleTickets.delete(key);
+                for (const [key, deadline] of consoleSessions) if (deadline <= now) consoleSessions.delete(key);
+                const ticket = randomBytes(32).toString('hex');
+                consoleTickets.set(digest(ticket), now + 60000);
+                return send({ticket});
+            }
             if (path === '/v1/workspaces' && method === 'GET') {
                 human();
                 return send(store.list('workspace'));
@@ -237,8 +268,10 @@ export function createGateway(options: GatewayOptions) {
                 }
                 const s = admin.registerSession(branchId, { id: randomUUID(), name: b.label ?? b.runtime }, b.runtime, b.nativeId ?? randomUUID());
                 const sessionToken = randomBytes(32).toString('hex');
-                store.db.prepare('INSERT OR REPLACE INTO gateway_credentials(hash,session_id) VALUES(?,?)').run(digest(sessionToken), s.id);
-                store.db.prepare("INSERT OR REPLACE INTO gateway_sessions VALUES(?,'active')").run(s.id);
+                store.transaction(() => {
+                    store.db.prepare('INSERT INTO gateway_credentials(hash,session_id) VALUES(?,?)').run(digest(sessionToken), s.id);
+                    store.db.prepare("INSERT INTO gateway_sessions VALUES(?,'active')").run(s.id);
+                });
                 return send({ ...s, sessionId: s.id, sessionToken, seq: Number(store.db.prepare('SELECT COALESCE(MAX(sequence),0) AS seq FROM events').get()!.seq) }, 201);
             }
             if (path === '/v1/sessions' && method === 'GET') {
@@ -253,6 +286,7 @@ export function createGateway(options: GatewayOptions) {
                     return send(deliverySync.pendingCorrections(s));
                 if (method === 'POST' && correctionNotificationRoute[2] === 'delivered') {
                     const b = z.object({ itemIds: z.array(text).max(100) }).parse(await body(req));
+                    active(sid);
                     const allowed = new Set(deliverySync.correctionItemIds(s));
                     if (b.itemIds.some(itemId => !allowed.has(itemId))) throw new DomainError('DENY', 'Correction item is not addressed to this session branch');
                     return send({ delivered: deliverySync.markCorrectionsDelivered(s.id, b.itemIds) });
@@ -298,6 +332,8 @@ export function createGateway(options: GatewayOptions) {
                 if (b.sessionId && b.sessionId !== sid)
                     throw new DomainError('DENY', 'Session credential mismatch');
                 const s = session(sid);
+                if (b.nativeSessionId && b.nativeSessionId !== s.nativeId)
+                    throw new DomainError('DENY', 'Native session identity mismatch');
                 const prior = store.db.prepare("SELECT data FROM gateway_approvals WHERE json_extract(data,'$.sessionId')=? AND json_extract(data,'$.requestId')=?").get(sid, b.requestId);
                 let a: ToolApproval;
                 if (prior) {
@@ -366,6 +402,7 @@ export function createGateway(options: GatewayOptions) {
             if (path === '/v1/events' && method === 'POST') {
                 if (!sid) throw new DomainError('DENY', 'Session credential required for activity');
                 const b = z.object({ id: text, workspaceId: text, source: text, nativeId: text, sessionId: text.optional(), type: text, mode: z.literal('observed'), payload: z.unknown(), occurredAt: text }).parse(await body(req));
+                active(sid);
                 const inserted=svc.ingest({ ...b, payload: b.payload });
                 if(inserted&&b.sessionId)tasks.observe(b.sessionId,b.type,b.payload);
                 return send({ inserted });
@@ -405,6 +442,7 @@ export function createGateway(options: GatewayOptions) {
             if(nativeTaskRoute&&method==='POST') {
                 if(!sid)throw new DomainError('DENY','Session credential required');
                 const b=z.object({nativeTurnId:text.optional(),reason:text.optional()}).parse(await body(req));
+                active(sid);
                 return send(nativeTaskRoute[2]==='accepted'?tasks.accepted(nativeTaskRoute[1],sid,text.parse(b.nativeTurnId)):tasks.unavailable(nativeTaskRoute[1],sid,text.parse(b.reason)));
             }
             if (path === '/v1/stream' && method === 'GET') {
@@ -416,6 +454,10 @@ export function createGateway(options: GatewayOptions) {
                 res.write(': connected\n\n');
                 streams.add(res);
                 const poll = () => {
+                    if (isAdmin && !req.headers.authorization && (consoleSessions.get(digest(cookie!)) ?? 0) <= Date.now()) {
+                        res.end();
+                        return;
+                    }
                     const rows = store.db.prepare('SELECT sequence,data FROM events WHERE sequence>? ORDER BY sequence LIMIT 100').all(cursor) as {
                         sequence: number;
                         data: string;
@@ -522,7 +564,11 @@ export function createGateway(options: GatewayOptions) {
             if (branchRoute) {
                 const [,branchId,kind] = branchRoute;
                 if (method === 'GET' && kind === 'work') return send(svc.branchOverview(branchId!));
-                if (method === 'POST' && kind === 'work') return send(svc.proposeWork(branchId!,workInputSchema.parse(await body(req))),201);
+                if (method === 'POST' && kind === 'work') {
+                    const b = workInputSchema.parse(await body(req));
+                    if (sid) active(sid);
+                    return send(svc.proposeWork(branchId!,b),201);
+                }
                 if (method === 'POST' && kind === 'corrections') {
                     human();
                     const b = z.object({body:text}).parse(await body(req));

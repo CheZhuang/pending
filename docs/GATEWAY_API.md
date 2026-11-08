@@ -1,12 +1,12 @@
 # Gateway API
 
-Run the local daemon with Node.js 24+. Local human requests carry no credentials. Native sessions retain individual bearer credentials. See [local security](LOCAL_SECURITY.md). HTTP input never selects a Core actor.
+Run the local daemon with Node.js 24+. Trusted local launchers automatically read the owner-only human capability file. The Console uses an HttpOnly cookie obtained from a one-use launch ticket. Native sessions retain individual bearer credentials. See [local security](LOCAL_SECURITY.md). HTTP input never selects a Core actor.
 
 See [Main editing, history and restoration](MAIN_API.md) for the complete Main contract, and [task dispatch](TASK_DISPATCH_API.md) for explicit native task submission. The [quick start](../README.md#quick-start) documents startup and configuration. [fixtures/gateway.http](../fixtures/gateway.http) contains manual HTTP requests.
 
 ## Supervision API
 
-All paths below are under `/v1`. Human requests omit Authorization and browser writes require an allowed Origin. Agents may read only their workspace and submit work only on their own branch. Errors use `{error:{code,message}}`; stale Main writes return HTTP 409 / `STALE`.
+All paths below are under `/v1`. Human HTTP clients send the local human bearer capability or a Console cookie; browser writes require an allowed Origin. Anonymous API requests return 401. Agents may read only their workspace and submit work only on their own branch. Errors use `{error:{code,message}}`; stale Main writes return HTTP 409 / `STALE`.
 
 | Method and path | Behavior |
 | --- | --- |
@@ -50,7 +50,7 @@ Local OS discovery is documented in [Native discovery](NATIVE_DISCOVERY.md). Hum
 - `GET /workspaces/:id/events?after=0&limit=1000` returns a durable sequence page. Core also supports frozen through-sequence windows and session/source/type filters.
 - `GET /stream?workspaceId=:id&after=0` delivers SSE with event IDs and reconnect cursors. Native credentials see their own session events.
 - `POST /decide` is the native pre-execution tool approval boundary; `GET /approvals` and `POST /approvals/:id` serve human review with `{decision:"approved"|"denied",reason?}`. Timeouts and ended sessions deny execution. Approval does not imply native success.
-- Console login/logout endpoints have been removed; no cookies are issued.
+- Human `POST /console-ticket` returns `{ticket}` (one use, 60 seconds). `POST /console-session` with `{ticket}` consumes it and issues an HttpOnly SameSite=Strict cookie. No GET issues credentials. Console sessions expire after 12 hours or daemon restart; reopen via the local CLI. Exact configured development origins support credentialed CORS.
 
 Human task routes are `POST|GET /tasks`, `GET /tasks/:id`, and `POST /tasks/:id/cancel`; session-bound runner routes are listed in the [task dispatch contract](TASK_DISPATCH_API.md).
 

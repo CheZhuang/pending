@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,8 +15,9 @@ test('human dispatch is durable, idempotent, session-bound, and reconciled from 
   const database=join(dir,'db.sqlite');
   let gateway=createGateway({database});
   let url=await listen(gateway);
-  const call=(path:string,token:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{...(token===admin?{}:{authorization:`Bearer ${token}`}),...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
+  const call=async(path:string,token:string,method='GET',payload?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${token===admin?await readHumanToken(database):token}`,...(payload?{'content-type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined});
   try{
+    assert.equal((await fetch(url+'/v1/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:'anonymous',instructions:'no',requestId:'anonymous'})})).status,401);
     const codex=await (await call('/v1/sessions',admin,'POST',{runtime:'codex-app-server',cwd:dir,label:'Codex'})).json() as {sessionId:string;sessionToken:string;workspaceId:string;branchId:string};
     const claude=await (await call('/v1/sessions',admin,'POST',{runtime:'claude-code',cwd:dir,label:'Claude'})).json() as {sessionId:string;sessionToken:string};
     const input={sessionId:codex.sessionId,instructions:'Read README and propose one finding',includeMain:true,requestId:'human-click-1'};
@@ -63,6 +64,8 @@ async function listen(gateway:ReturnType<typeof createGateway>):Promise<string>{
   return `http://127.0.0.1:${address.port}`;
 }
 
+async function readHumanToken(database:string):Promise<string>{return (await readFile(`${database}.human-token`,'utf8')).trim();}
+
 test('managed Codex runner consumes a human task through a fake App Server',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'agentree-managed-dispatch-'));
   const script=join(dir,'fake.cjs');
@@ -72,7 +75,7 @@ test('managed Codex runner consumes a human task through a fake App Server',asyn
   let native:ManagedCodex|undefined;
   try{
     native=await ManagedCodex.open({gatewayUrl:url,databasePath:join(dir,'db.sqlite'),cwd:dir,label:'fake Codex',stateDirectory:join(dir,'native'),adapter:{command:process.execPath,args:[script]}});
-    const request=(path:string,method='GET',body?:unknown)=>fetch(url+path,{method,headers:{...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+    const request=async(path:string,method='GET',body?:unknown)=>fetch(url+path,{method,headers:{authorization:`Bearer ${await readHumanToken(join(dir,'db.sqlite'))}`,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
     const deadline=Date.now()+3000;
     await new Promise(r=>setTimeout(r,300));
     const result=await request('/v1/tasks','POST',{sessionId:native.binding.sessionId,instructions:'Inspect the project',requestId:'fake-runner-task'});
@@ -97,14 +100,22 @@ test('startLocal creates the daemon on first run and reuses its local database o
   process.env.AGENTREE_HOME=dir;process.env.PORT=String(port);process.env.AGENTREE_NO_OPEN='1';
   try{
     const first=await startLocal();
-    assert.equal(first,`http://127.0.0.1:${port}`);
-    assert.equal((await (await fetch(`${first}/health`)).json() as {application:string;database:string}).application,'agentree');
+    const firstUrl=new URL(first);
+    assert.equal(`${firstUrl.origin}${firstUrl.pathname}`,`http://127.0.0.1:${port}/`);
+    assert.match(firstUrl.hash,/^#agentree-ticket=/);
+    assert.equal((await (await fetch(`${firstUrl.origin}/health`)).json() as {application:string;database:string}).application,'agentree');
     const second=await startLocal();
-    assert.equal(second,first);
+    assert.equal(new URL(second).origin,firstUrl.origin);
+    assert.notEqual(new URL(second).hash,firstUrl.hash,'each launcher invocation issues a fresh ticket');
     process.env.AGENTREE_HOME=join(dir,'different-home');
     await assert.rejects(startLocal(), /another service or Agentree data directory/);
     process.env.AGENTREE_HOME=dir;
-    assert.equal((await fetch(`${second}/v1/workspaces`)).status,200);
+    assert.equal((await fetch(`${firstUrl.origin}/v1/workspaces`)).status,401,'the returned fragment URL does not grant access until exchanged');
+    const ticket=decodeURIComponent(firstUrl.hash.slice('#agentree-ticket='.length));
+    const exchange=await fetch(`${firstUrl.origin}/v1/console-session`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ticket})});
+    assert.equal(exchange.status,200);
+    const cookie=exchange.headers.get('set-cookie')!.split(';',1)[0]!;
+    assert.equal((await fetch(`${firstUrl.origin}/v1/workspaces`,{headers:{cookie}})).status,200);
   }finally{
     // startLocal deliberately detaches its daemon. Locate only the process
     // carrying this test's unique AGENTREE_HOME and ask it to shut down.

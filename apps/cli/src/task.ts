@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
+import { localHumanHeaders } from '../../../packages/adapters/src/local-auth.js';
 
 const help = `Submit and inspect tasks for a managed Agentree session.
 
@@ -18,7 +19,7 @@ if (parsed.values.help || !action) { console.log(help); process.exit(parsed.valu
 
 const gateway = parsed.values.gateway ?? process.env.AGENTREE_GATEWAY_URL ?? 'http://127.0.0.1:8787';
 const request = async (path: string, method = 'GET', body?: unknown) => {
-  const response = await fetch(new URL(path, gateway), { method, headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetch(new URL(path, gateway), { method, redirect:'error', headers: { ...localHumanHeaders(gateway), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const result = await response.json().catch(() => null) as unknown;
   if (!response.ok) throw new Error(`Gateway returned HTTP ${response.status}: ${JSON.stringify(result)}`);
   console.log(JSON.stringify(result, null, 2));

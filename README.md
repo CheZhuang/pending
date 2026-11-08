@@ -23,10 +23,19 @@ npm run agentree
 # Or npm link once, then: agentree
 ```
 
-This starts or connects to the local Gateway and opens `http://127.0.0.1:8787`.
+This starts or connects to the local Gateway and opens `http://127.0.0.1:8787` with a one-use Console launch ticket.
 The built Console is served on that origin. No pairing or credential setup is needed.
-For Vite development, run `npm run dev` and `npm --prefix apps/web run dev:live`,
-then open `http://localhost:5173/?api=live`.
+For Vite development, explicitly enable the development origin and use the launcher:
+
+```sh
+GATEWAY_CONSOLE_ORIGINS=http://localhost:5173 npm run dev
+# In another terminal:
+npm --prefix apps/web run dev:live
+# Then:
+AGENTREE_CONSOLE_URL='http://localhost:5173/?api=live' npm run agentree
+```
+
+Development origins are disabled by default. Reopen through `agentree` after a Gateway restart or when Console access expires.
 
 Create a workspace and an initial expectation from the CLI, using an absolute project path:
 
@@ -48,7 +57,8 @@ For a standalone Console preview, use `npm --prefix apps/web run dev` and open `
 | `GATEWAY_DATA_DIR` | `~/.local/share/agentree`; Gateway database (AGENTREE_HOME takes precedence) |
 | `PORT` | `8787`; Gateway binds to `127.0.0.1` |
 | `AGENTREE_NO_OPEN` | Set to `1` to print the Console URL without opening a browser |
-| `GATEWAY_CONSOLE_ORIGINS` | Comma-separated origins; defaults to `http://localhost:5173,http://127.0.0.1:5173` |
+| `GATEWAY_CONSOLE_ORIGINS` | Comma-separated loopback Console origins; disabled by default |
+| `AGENTREE_CONSOLE_URL` | Optional loopback Console URL opened by the launcher for Vite development |
 | `VITE_GATEWAY_URL` | Console build/dev setting; same origin in builds, `http://localhost:8787` in Vite |
 
 Keep the data directory and credentials private. Use the same data directory for the Gateway, CLI, and native launchers. The CLI has [additional state overrides](apps/cli/README.md). Native hosts need local access to the Gateway SQLite database for MCP.

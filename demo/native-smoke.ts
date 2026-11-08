@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createGateway } from '../src/gateway.js';
 import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
 import { runManagedClaude } from '../packages/adapters/src/claude-launcher.js';
+import { localHumanHeaders } from '../packages/adapters/src/local-auth.js';
 
 const runtime=process.argv[2];
 if(runtime!=='codex'&&runtime!=='claude')throw new Error('Usage: npm run smoke:native -- codex|claude');
@@ -16,7 +17,7 @@ const address=gateway.server.address();if(!address||typeof address==='string')th
 const gatewayUrl=`http://127.0.0.1:${address.port}`;
 let native:ManagedCodex|undefined;
 let dispatchEvidence:unknown;
-const headers={'content-type':'application/json'};
+const headers={...localHumanHeaders(gatewayUrl,database),'content-type':'application/json'};
 // Smoke review grants only literal reads of the one synthetic fixture; all other tool requests are denied.
 const reviews=setInterval(()=>{void (async()=>{
  const response=await fetch(`${gatewayUrl}/v1/approvals`,{headers});

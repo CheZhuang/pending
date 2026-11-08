@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGateway } from '../../../src/gateway.js';
@@ -15,13 +15,14 @@ test('native connection binds Claude hook identity and deduplicates hook retries
     await new Promise<void>(resolve=>gateway.server.listen(0,'127.0.0.1',resolve));
     const address=gateway.server.address();assert.ok(address&&typeof address!=='string');
     const gatewayUrl=`http://127.0.0.1:${address.port}`;
-    const client=await NativeGatewayClient.register(gatewayUrl,{runtime:'claude-code',cwd:directory,label:'Claude',nativeId:'native-claude-test'});
+    const client=await NativeGatewayClient.register(gatewayUrl,{runtime:'claude-code',cwd:directory,label:'Claude',nativeId:'native-claude-test'},join(directory,'gateway.sqlite'));
     const env={HARNESS_GATEWAY_URL:gatewayUrl,HARNESS_SESSION_ID:client.session.id,HARNESS_SESSION_TOKEN:client.connection.sessionToken};
     const input=JSON.stringify({session_id:'native-claude-test',hook_event_name:'PreToolUse',tool_use_id:'tool-1',tool_name:'Read',tool_input:{file_path:'a'},cwd:directory});
     assert.equal(await observeClaudeHook(input,env),true);
     assert.equal(await observeClaudeHook(input,env),false);
     await assert.rejects(observeClaudeHook(JSON.stringify({...JSON.parse(input),session_id:'spoofed'}),env),/does not match/);
-    const response=await fetch(`${gatewayUrl}/v1/workspaces/${client.session.workspaceId}/events?limit=100`);
+    const humanToken=(await readFile(`${join(directory,'gateway.sqlite')}.human-token`,'utf8')).trim();
+    const response=await fetch(`${gatewayUrl}/v1/workspaces/${client.session.workspaceId}/events?limit=100`,{headers:{authorization:`Bearer ${humanToken}`}});
     const events=(await response.json() as {events:Array<{source:string;nativeId:string}>}).events;
     assert.equal(events.filter(e=>e.nativeId==='claude-code:native-claude-test:PreToolUse:tool-1').length,1);
     await client.end();
