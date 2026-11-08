@@ -12,6 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  discovery:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Native process discovery and Gateway contract tests
+        run: node --import tsx --test --test-isolation=none packages/adapters/src/process-discovery.test.ts src/process-discovery.test.ts
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10

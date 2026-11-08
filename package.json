@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "koffi": "^3.3.7",
+    "systeminformation": "^5.33.19",
     "zod": "^3.24.2"
   },
   "devDependencies": {

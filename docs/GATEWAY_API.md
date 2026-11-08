@@ -39,6 +39,8 @@ Text-only Main edits retain file references; pass `files:[]` to clear them. Main
 
 ## Preserved native and monitoring endpoints
 
+Local OS discovery is documented in [Native discovery](NATIVE_DISCOVERY.md). Human `GET /processes` and `POST /processes/refresh` expose an ephemeral process inventory separately from registered Sessions. Session credentials cannot enumerate it. A launcher may associate its child through credentialed `POST /sessions/:id/process` with `{pid,startTime}`; that association grants no native control capability. Shared wire types are in `packages/contracts/src/gateway.ts` and the Console live/mock API clients consume the same inventory shape.
+
 - `GET /health` reports daemon health.
 - `GET|POST /workspaces`, `GET /workspaces/:id`, `GET|POST /workspaces/:id/branches` retain workspace and logical branch operations.
 - `POST /sessions` registers `{runtime,cwd?,label?,branchId?,nativeId?}` as the local human. It returns a session binding and session token. Use `cwd` or an existing branch; Main cannot own a native session.

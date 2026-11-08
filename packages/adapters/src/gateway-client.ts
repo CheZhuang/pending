@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { NormalizedEvent, Session } from '../../contracts/src/index.js';
 import type { RegisterManagedSessionRequest, RegisterManagedSessionResponse, ToolDecisionResponse } from '../../contracts/src/gateway.js';
+import { nativeStartTime } from './process-platform.js';
 
 const sessionSchema = z.object({ id:z.string().min(1), workspaceId:z.string().min(1), branchId:z.string().min(1), agentId:z.string().min(1), nativeId:z.string().min(1), runtime:z.string().min(1) });
 export interface NativeConnection { gatewayUrl:string; sessionId:string; sessionToken:string }
@@ -24,6 +25,17 @@ export class NativeGatewayClient {
     return new NativeGatewayClient(connection,session);
   }
   async authorize():Promise<void> { await NativeGatewayClient.attach(this.connection); }
+  /** Best effort visibility only. A process claim grants no native control authority. */
+  async bindProcess(pid: number): Promise<void> {
+    const startTime = await nativeStartTime(pid);
+    if (!startTime) return;
+    // The first inventory may still predate spawn. Retain this exact birth
+    // identity across retries so an exited child's PID cannot attach a successor.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { await this.request(`/v1/sessions/${encodeURIComponent(this.session.id)}/process`, 'POST', {pid,startTime}); return; }
+      catch (error) { if (attempt === 2) throw error; await new Promise(resolve => setTimeout(resolve, 750)); }
+    }
+  }
   async request(path:string, method='GET', body?:unknown, timeoutMs=10000):Promise<unknown> {
     const response=await fetch(new URL(path,this.connection.gatewayUrl),{method,headers:{authorization:`Bearer ${this.connection.sessionToken}`,...(body!==undefined?{'content-type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(timeoutMs)});
     if(!response.ok)throw new Error(`Gateway ${method} ${path} failed: HTTP ${response.status}`);

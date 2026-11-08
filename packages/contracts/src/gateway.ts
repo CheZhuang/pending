@@ -24,4 +24,20 @@ export interface SessionLifecycle {
   state: 'active' | 'kill-requested' | 'ended';
   processStatus: 'unknown' | 'exit-reported';
   exit?: {exitCode?: number|null; signal?: string|null};
+  /** Launcher-reported identity; presence alone is not proof the process is still running. */
+  process?: ProcessIdentity;
+}
+
+/** Opaque OS birth identity; never compare PID alone or parse as an ISO date. */
+export interface ProcessIdentity { pid: number; startTime?: string }
+export interface DiscoveredProcess extends ProcessIdentity {
+  id: string; runtime: 'claude-code' | 'codex'; parentPid?: number;
+  executable?: string; argv?: string[]; commandLine?: string; cwd?: string;
+  evidence: string; identityReliable: boolean; managedSessionId?: string;
+  /** Discovery alone grants no adapter capabilities. Consult the managed Session when linked. */
+  capabilities: { passiveObservation: boolean; managedSession: boolean; contextInjection: boolean; preExecutionInterception: boolean };
+  nativeObservation: 'unavailable';
+}
+export interface ProcessInventory {
+  processes: DiscoveredProcess[]; status: 'initializing' | 'ok' | 'unavailable'; scannedAt?: string; message?: string;
 }

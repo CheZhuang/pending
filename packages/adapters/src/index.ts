@@ -142,3 +142,5 @@ export { HttpManagedClaudeGateway, runManagedClaude, type ClaudeLaunchOptions, t
 export { NativeGatewayClient, type NativeConnection } from './gateway-client.js';
 export { ManagedCodex, gatewayCodexApproval, type ManagedCodexOptions } from './codex-managed.js';
 export { observeClaudeHook } from './claude-observer.js';
+export { ProcessDiscovery, identifyProcess, sameProcess, type ProcessProvider, type ProcessSnapshot, type ManagedProcessBinding } from './process-discovery.js';
+export { LocalProcessProvider, nativeStartTime } from './process-platform.js';

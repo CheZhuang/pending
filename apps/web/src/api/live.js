@@ -74,6 +74,8 @@ export const live = {
   mergeWork: (branchId, body) => request(`/v1/branches/${encodeURIComponent(branchId)}/merge`, { method: 'POST', body }),
   merges: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/merges`),
   sessions: () => request('/v1/sessions'),
+  processes: () => request('/v1/processes'),
+  refreshProcesses: () => request('/v1/processes/refresh', { method:'POST' }),
   killSession: (id) => request(`/v1/sessions/${encodeURIComponent(id)}/kill`, { method: 'POST' }),
 
   // Local native process discovery (Person 2 API contract, mock-first).

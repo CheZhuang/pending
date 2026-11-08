@@ -112,6 +112,7 @@ export class ManagedCodex {
       const configured=[...args,'-c',`mcp_servers.agentree.command=${JSON.stringify(mcp.command)}`,'-c',`mcp_servers.agentree.args=${JSON.stringify(mcp.args)}`,'-c',`mcp_servers.agentree.env_vars=${JSON.stringify(Object.keys(mcp.env))}`];
       adapter=await CodexAppServerAdapter.resume(gateway.session.nativeId,{...options.adapter,cwd,args:configured,env:{...process.env,...options.adapter?.env,...mcp.env},threadResumeParams:{...options.adapter?.threadResumeParams,approvalPolicy:options.adapter?.threadStartParams?.approvalPolicy??'untrusted',sandbox:options.adapter?.threadStartParams?.sandbox??'workspace-write'},journalPath:journalPath??join(directory,`${gateway.session.nativeId}.events.json`),initialCursor:await cursors.get(cursorKey(binding)),onServerRequest:request=>gatewayCodexApproval(gateway!,request,cwd)});
       const result=new ManagedCodex(adapter,gateway,registrationFile,store,cursors,binding);
+      if (adapter.processId) void gateway.bindProcess(adapter.processId).catch(() => undefined);
       result.pumpTask=result.pump();
       return result;
     }catch(error){await adapter?.close();if(created)await gateway?.end().catch(()=>undefined);store.close();throw error;}

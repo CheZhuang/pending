@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createClaudeHookSettings } from './claude-settings.js';
+import { nativeStartTime } from './process-platform.js';
 
 export interface ManagedClaudeSession {
   sessionId: string;
@@ -24,6 +25,7 @@ export interface ManagedClaudeGateway {
   registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession>;
   stream(afterSeq: number, signal: AbortSignal): AsyncIterable<ManagedClaudeEvent>;
   endSession(sessionId: string, exit?: { exitCode: number | null; signal: string | null }): Promise<void>;
+  bindProcess?(sessionId: string, pid: number): Promise<void>;
 }
 
 /** REST bridge for the session/stream routes described by the shared gateway plan. */
@@ -33,6 +35,21 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
   constructor(
     private readonly baseUrl = 'http://localhost:8787',
   ) {}
+
+  async bindProcess(sessionId: string, pid: number): Promise<void> {
+    const startTime = await nativeStartTime(pid);
+    if (!startTime) return;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/process`, this.baseUrl), {
+          method: 'POST', headers: {'content-type':'application/json', authorization:`Bearer ${this.sessionToken}`},
+          body:JSON.stringify({pid,startTime}), signal:AbortSignal.timeout(10000),
+        });
+        if (!response.ok) throw new Error('Process association unavailable');
+        return;
+      } catch (error) { if (attempt === 2) throw error; await new Promise(resolve => setTimeout(resolve, 750)); }
+    }
+  }
 
   async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
@@ -159,6 +176,9 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
         ...(session.sessionToken ? { HARNESS_SESSION_TOKEN: session.sessionToken } : {}) },
     });
     const managedChild = child;
+    child.once('spawn', () => {
+      if (managedChild.pid) void gateway.bindProcess?.(session.sessionId, managedChild.pid).catch(() => undefined);
+    });
     const killChild = () => {
       if (stopping) return;
       stopping = true;
