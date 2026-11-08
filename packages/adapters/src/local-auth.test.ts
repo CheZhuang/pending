@@ -84,7 +84,7 @@ try {
   $rules = $stream.GetAccessControl().GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
   if ($rules.IdentityReference.Value -notcontains 'S-1-1-0') { throw 'Everyone grant was not applied' }
 } finally { $stream.Dispose() }
-`], {env:{...process.env,AGENTREE_TEST_CAPABILITY_PATH:`${database}.human-token`},timeout:5_000,windowsHide:true,stdio:'pipe'});
+`], {env:{...process.env,AGENTREE_TEST_CAPABILITY_PATH:`${database}.human-token`},timeout:30_000,windowsHide:true,stdio:'pipe'});
     assert.throws(()=>readLocalHumanToken(database),/Windows ACL validation failed/);
     assert.throws(()=>ensureLocalHumanToken(database),/Windows ACL validation failed/);
   } finally {await rm(directory,{recursive:true,force:true});}

@@ -26,7 +26,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Native process discovery and Gateway contract tests
-        run: node --import tsx --test --test-isolation=none packages/adapters/src/local-auth.test.ts packages/adapters/src/process-discovery.test.ts src/process-discovery.test.ts
+        run: node --import tsx --test --test-isolation=none packages/adapters/src/local-auth.test.ts packages/adapters/src/windows-file-security.test.ts packages/adapters/src/process-discovery.test.ts src/process-discovery.test.ts
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
