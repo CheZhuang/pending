@@ -1,4 +1,4 @@
-/** Gateway v1 wire contracts. Core domain records retain their existing shapes. */
+/** Gateway v1 native-session and approval wire contracts. Supervision records are exported by index.ts. */
 export interface RegisterManagedSessionRequest {
   runtime: string; cwd?: string; label?: string; branchId?: string; nativeId?: string;
 }

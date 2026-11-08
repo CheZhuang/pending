@@ -30,7 +30,7 @@ const reviews=setInterval(()=>{void (async()=>{
  }
 })().catch(error=>process.stderr.write(`Smoke review: ${error instanceof Error?error.message:String(error)}\n`));},100);
 try {
- const prompt='Use the agentree MCP context_publish tool now. Publish a finding with key "native-smoke", body "AGENTREE_NATIVE_SMOKE", and scope {"type":"workspace"}. Then say SMOKE_OK. Do not use any other tools or modify files.';
+ const prompt='Use the agentree MCP work_propose tool now. Propose work with body "AGENTREE_NATIVE_SMOKE" and no files. Then say SMOKE_OK. Do not use any other tools or modify files.';
  let sessionId:string|undefined;
  if(runtime==='codex') {
   native=await ManagedCodex.open({gatewayUrl,databasePath:database,cwd:directory,adminToken,stateDirectory:join(directory,'state'),adapter:{args:['app-server','--listen','stdio://','-c','mcp_servers={}'],threadStartParams:{approvalPolicy:'untrusted',sandbox:'read-only'}}});
@@ -49,8 +49,8 @@ try {
  }
  if(!sessionId)throw new Error('Native session was not registered');
  const session=await (await fetch(`${gatewayUrl}/v1/sessions/${sessionId}`,{headers})).json() as {workspaceId:string;branchId:string};
- const snapshot=await (await fetch(`${gatewayUrl}/v1/branches/${session.branchId}/context`,{headers})).json() as {knowledge:Array<{knowledge:{key:string;body:string}}>};
- if(!snapshot.knowledge.some(c=>c.knowledge.key==='native-smoke'&&c.knowledge.body.includes('AGENTREE_NATIVE_SMOKE')))throw new Error('Native agent did not publish the fixture through MCP');
+ const snapshot=await (await fetch(`${gatewayUrl}/v1/branches/${session.branchId}/work`,{headers})).json() as {work:Array<{body:string;state:string}>};
+ if(!snapshot.work.some(w=>w.body.includes('AGENTREE_NATIVE_SMOKE')&&w.state==='proposed'))throw new Error('Native agent did not propose work through MCP');
  const events=await (await fetch(`${gatewayUrl}/v1/workspaces/${session.workspaceId}/events?limit=1000`,{headers})).json() as {events:Array<{source:string;nativeId:string;sessionId?:string}>};
  const nativeEvents=events.events.filter(event=>event.sessionId===sessionId&&event.source.startsWith(runtime==='codex'?'codex-app-server:':'claude-code:'));
  if(nativeEvents.length===0)throw new Error('No native observations reached Gateway');

@@ -1,15 +1,11 @@
-# B package interface notes
+# Native integration boundary
 
-Adapters and MCP reuse `packages/contracts` domain types and A's `ApplicationService`. Identity is constructed at the trusted daemon boundary; native/model payloads never choose an Actor. Observed events grant no execution authority.
+Adapters reuse the shared session/event contracts and trusted Core service. Identity comes from the registered native session and its credential; model payloads never choose an actor. Observed events grant no execution or Main authority.
 
-## Implemented integration
+Native observers retain original payloads and map source-native identities into idempotent durable events. Existing cursor stores/journals retry without duplicating ingestion. Claude hooks and Codex App Server notifications provide tool inputs, file changes and runtime results where available. Core reuses rooted file extraction; command strings alone are not parsed into speculative file changes.
 
-- Administrative native-session registration helpers validate the returned branch/runtime/native ID binding.
-- `SqliteCursorStore` persists adapter checkpoints through the generic entity API. Event deduplication uses `(workspaceId, source, nativeId)`.
-- Codex keeps uncheckpointed observations in a local delivery journal. Normalized file-change events expose `item.changes` and `cwd` for C's `extractTouches`, while retaining the original notification params.
-- MCP now uses C's `ContextSync` with an injected durable `EntityLedger`. Pull/retry, subscriptions, acknowledgement, budgets and authority upgrades share C's implementation.
-- MCP publications support `impactScope` and expected branch/main snapshot tokens. Merge requests can include the expected inherited-main revision.
+The session-bound MCP server revalidates the runtime credential on every call. It exposes supervision retrieval and lightweight work proposals. Context sync delivers current Main snapshots, branch work and targeted corrections, with retrieval/acknowledgment bookkeeping. It does not rank knowledge types, require scopes or execute recovery.
 
-## Remaining host integration
+Tool interception remains distinct from observation. The existing pre-execution hooks and native approval requests ask the Gateway for an allow/deny decision; successful approval is not proof of execution. Native completion/failure events remain the source for runtime-reported results.
 
-The HTTP entry point is still a health stub. Gateway transport authentication, trusted launch registration (including native ID allocation), specific tool policy/approval decisions, and end/kill lifecycle APIs remain A/B integration requirements. See `packages/mcp/README.md` for the concrete handoff. CLI entry points, Claude transcript observation and native-runtime end-to-end validation remain separate work.
+The Gateway implements authenticated registration, observation, approvals and lifecycle reporting. Main editing and human acceptance/corrections use the [supervision API](../../docs/GATEWAY_API.md). Passive observation offers no correction delivery by itself; configured MCP agents must retrieve updates through their native runtime. See [architecture and limitations](../../docs/ARCHITECTURE.md).

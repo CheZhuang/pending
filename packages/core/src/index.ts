@@ -2,20 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { SqliteStore } from '../../storage/src/index.js';
 import {
-    DomainError, knowledgeSchema, type Actor, type Branch, type ContextCommit,
-    type ContextEntry, type ContextRevision, type ContextSnapshot, type Knowledge,
-    type MergeRequest, type NormalizedEvent, type Operation, type PolicyDecision,
-    type Review, type Session, type Workspace, type EventQuery, type EventPage,
-    type Conflict, type ConflictResolution,
+    DomainError, mainInputSchema, workInputSchema, type Actor, type Branch, type MainEntry,
+    type MainInput, type MainSnapshot, type BranchWork, type WorkInput, type FileRef,
+    type Merge, type Correction, type Conflict, type BranchOverview, type SupervisionContext,
+    type NormalizedEvent, type Operation, type PolicyDecision, type Session, type Workspace,
+    type EventQuery, type EventPage,
 } from '../../contracts/src/index.js';
-import { decisionIdentity, normalizeScope, scopesOverlap } from './scope.js';
-export { decisionIdentity, normalizeScope, scopesOverlap } from './scope.js';
+import { normalizeFile } from './scope.js';
+import { extractTouches } from '../../sync/src/focus.js';
+import { createHash } from 'node:crypto';
+export { normalizeFile } from './scope.js';
 const id = () => randomUUID();
-const impact = (commit: ContextCommit) => commit.knowledge.impactScope ?? commit.knowledge.scope;
-const overlaps = (a: ContextCommit, b: ContextCommit) => a.knowledge.key === b.knowledge.key
-    && (decisionIdentity(a.knowledge.key,a.knowledge.scope) === decisionIdentity(b.knowledge.key,b.knowledge.scope)
-        || scopesOverlap(impact(a), impact(b)));
-const identity = (commit: ContextCommit) => decisionIdentity(commit.knowledge.key, commit.knowledge.scope);
 const integer = (n: number) => Number.isSafeInteger(n) && n >= 0;
 
 /** Construct only at the trusted daemon boundary. Never deserialize Actor from agent input. */
@@ -39,13 +36,13 @@ export class AgentreeService {
         let outcome: PolicyDecision['outcome'] = 'allow', reason = 'Authorized';
         if (this.actor.type === 'agent') {
             const session = this.session();
-            if (['workspace.create', 'branch.create', 'session.register', 'review.resolve'].includes(operation)
+            if (['workspace.create', 'branch.create', 'session.register', 'main.edit', 'merge.decide', 'conflict.decide', 'correction.send'].includes(operation)
                 || (workspaceId !== undefined && workspaceId !== session.workspaceId)
                 || (branch && branch.workspaceId !== session.workspaceId)
-                || (operation === 'context.publish' && branchId !== session.branchId)) {
+                || (operation === 'work.propose' && branchId !== session.branchId)) {
                 outcome = 'deny';
                 reason = 'Actor has no authority for this operation';
-            } else if (operation === 'controlled.execute' || (operation === 'merge.apply' && branch?.restricted)) {
+            } else if (operation === 'controlled.execute') {
                 outcome = 'require-approval';
                 reason = 'Human approval required';
             }
@@ -70,7 +67,7 @@ export class AgentreeService {
             || new Set(canonical.map(r => r.path)).size !== roots.length)
             throw new DomainError('ROOTS', 'Workspace roots require unique IDs and paths');
         const w: Workspace = { id: id(), name, roots: canonical, mainBranchId: id() };
-        const main: Branch = {id:w.mainBranchId, workspaceId:w.id, name:'main', restricted:true, revision:0};
+        const main: Branch = {id:w.mainBranchId, workspaceId:w.id, name:'main', revision:0};
         this.store.transaction(() => {
             this.store.insert(w.id, 'workspace', w);
             this.store.insert(main.id, 'branch', main);
@@ -79,11 +76,11 @@ export class AgentreeService {
         });
         return w;
     }
-    createBranch(workspaceId: string, name: string, restricted = false): Branch {
+    createBranch(workspaceId: string, name: string): Branch {
         this.guard('branch.create', undefined, false, workspaceId);
         this.get<Workspace>(workspaceId,'workspace');
         if (!name.trim() || name === 'main') throw new DomainError('BRANCH', 'Branch name is empty or reserved');
-        const b: Branch = { id: id(), workspaceId, name, restricted, revision: 0 };
+        const b: Branch = { id: id(), workspaceId, name, revision: 0 };
         this.store.transaction(() => {
             this.store.insert(b.id, 'branch', b);
             this.audit('branch.created', b, workspaceId);
@@ -95,7 +92,7 @@ export class AgentreeService {
         return this.store.transaction(() => {
             const b = this.get<Branch>(branchId,'branch');
             if (this.get<Workspace>(b.workspaceId,'workspace').mainBranchId === b.id)
-                throw new DomainError('BRANCH', 'Publish drafts on an agent branch; main accepts reviewed merges');
+                throw new DomainError('BRANCH', 'Sessions belong to an independent branch; Main is human governed');
             const row = this.store.db.prepare(`SELECT data FROM entities WHERE kind='session' AND workspace_ref=?
                 AND json_extract(data,'$.runtime')=? AND json_extract(data,'$.nativeId')=?`).get(b.workspaceId,runtime,nativeId) as {data:string}|undefined;
             if (row) {
@@ -128,201 +125,209 @@ export class AgentreeService {
             throw new DomainError('CURSOR', 'Invalid event cursor or limit (1–1000)');
         return this.store.eventPage(workspaceId,query);
     }
-    publish(branchId: string, knowledge: Knowledge, eventIds: string[] = [], expected?: ContextRevision): ContextCommit {
-        this.guard('context.publish', branchId);
-        const parsed = knowledgeSchema.parse(knowledge);
-        const s = this.session();
-        return this.store.transaction(() => {
-            const b = this.get<Branch>(branchId,'branch'), w = this.get<Workspace>(b.workspaceId,'workspace');
-            if (b.id === w.mainBranchId) throw new DomainError('AUTHORITATIVE', 'Main accepts reviewed merges only');
-            const token = this.revision(b);
-            if (expected) this.assertRevision(token,expected);
-            parsed.scope = normalizeScope(parsed.scope,w.roots);
-            if (parsed.impactScope) parsed.impactScope = normalizeScope(parsed.impactScope,w.roots);
-            for (const eventId of eventIds) {
-                const event = this.store.event<NormalizedEvent>(eventId);
-                if (!event || event.sessionId !== s.id || event.workspaceId !== b.workspaceId)
-                    throw new DomainError('PROVENANCE', 'Event must belong to publishing session');
-            }
-            // Inherited decisions do not prevent publishing a competing local proposal.
-            if (parsed.kind === 'decision' && this.store.decisions<ContextCommit>(b.id,b.revision)
-                .some(c => decisionIdentity(c.knowledge.key,c.knowledge.scope) === decisionIdentity(parsed.key,parsed.scope)))
-                throw new DomainError('AUTHORITATIVE', 'Local decision replacement requires merge review');
-            const c: ContextCommit = { id: id(), workspaceId: b.workspaceId, branchId, revision: b.revision + 1,
-                knowledge: parsed, provenance: { sessionId: s.id, eventIds: [...eventIds] }, createdAt: new Date().toISOString() };
-            this.store.insert(c.id, 'commit', c);
-            this.attach(b,c.id);
-            if (parsed.kind === 'decision') this.store.recordDecision(b.id,b.revision,identity(c),c.id);
-            this.audit('context.published', c, b.workspaceId);
-            return c;
-        });
-    }
-    private revision(b: Branch): ContextRevision {
-        const w = this.get<Workspace>(b.workspaceId,'workspace');
-        return {branchRevision:b.revision, mainRevision:this.get<Branch>(w.mainBranchId,'branch').revision};
-    }
-    private assertRevision(actual: ContextRevision, expected: ContextRevision) {
-        if (actual.branchRevision !== expected.branchRevision || actual.mainRevision !== expected.mainRevision)
-            throw new DomainError('STALE', 'Context changed; refresh the snapshot and review');
-    }
-    private entries(branchId: string, revision: number): ContextEntry[] {
-        const rows = this.store.db.prepare(`SELECT e.data,bc.revision FROM branch_commits bc
-            JOIN entities e ON e.id=bc.commit_id WHERE bc.branch_id=? AND bc.revision<=? ORDER BY bc.revision`)
-            .all(branchId,revision) as Array<{data:string;revision:number}>;
-        return rows.map(row => ({commit:JSON.parse(row.data) as ContextCommit, branchId, revision:row.revision}));
-    }
-    private effective(b: Branch, token: ContextRevision): ContextCommit[] {
-        const mainId = this.get<Workspace>(b.workspaceId,'workspace').mainBranchId;
-        const main = this.store.decisions<ContextCommit>(mainId,token.mainRevision);
-        if (b.id === mainId) return main;
-        const local = this.store.decisions<ContextCommit>(b.id,token.branchRevision);
-        return [...local.filter(c => !main.some(shared => overlaps(c,shared))), ...main];
-    }
     workspace(workspaceId: string): Workspace {
         this.guard('context.read',undefined,false,workspaceId);
         return this.get<Workspace>(workspaceId,'workspace');
     }
     branches(workspaceId: string): Branch[] {
         this.workspace(workspaceId);
-        const rows = this.store.db.prepare("SELECT data FROM entities WHERE kind='branch' AND workspace_ref=? ORDER BY rowid").all(workspaceId) as Array<{data:string}>;
-        return rows.map(row => JSON.parse(row.data) as Branch);
+        return this.store.list<Branch>('branch').filter(b => b.workspaceId === workspaceId);
     }
-    /** Cheap change detection for sync consumers; no context history is loaded. */
-    contextRevision(branchId: string): ContextRevision {
-        this.guard('context.read',branchId);
-        return this.store.transaction(() => this.revision(this.get<Branch>(branchId,'branch')),false);
+    private mainBranch(workspaceId: string): Branch {
+        return this.get<Branch>(this.get<Workspace>(workspaceId,'workspace').mainBranchId,'branch');
     }
-    /** Main is live by default; supplying a revision reconstructs the same immutable view. */
-    snapshot(branchId: string, revision?: ContextRevision): ContextSnapshot {
-        this.guard('context.read',branchId);
-        return this.store.transaction(() => {
-            const b = this.get<Branch>(branchId,'branch'), current = this.revision(b), token = revision ?? current;
-            const mainId = this.get<Workspace>(b.workspaceId,'workspace').mainBranchId;
-            if (!integer(token.branchRevision) || !integer(token.mainRevision)
-                || token.branchRevision > current.branchRevision || token.mainRevision > current.mainRevision
-                || (b.id === mainId && token.branchRevision !== token.mainRevision))
-                throw new DomainError('REVISION', 'Snapshot revision is out of range');
-            const shared = this.entries(mainId,token.mainRevision);
-            const sharedIds = new Set(shared.map(e => e.commit.id));
-            const entries = b.id === mainId ? shared : [...this.entries(b.id,token.branchRevision).filter(e => !sharedIds.has(e.commit.id)), ...shared];
-            const history = entries.map(e => e.commit);
-            return {branchId,revision:{...token},entries,history,knowledge:[...history.filter(c => c.knowledge.kind === 'finding'), ...this.effective(b,token)]};
-        },false);
+    private checkRevision(workspaceId: string, expected: number) {
+        if (!integer(expected) || this.mainBranch(workspaceId).revision !== expected)
+            throw new DomainError('STALE','Main changed; refresh before making this change');
     }
-    lookup(branchId: string): ContextCommit[] { return this.snapshot(branchId).knowledge; }
-    context(branchId: string): ContextCommit[] { return this.snapshot(branchId).history; }
-    private attach(b: Branch, commitId: string) {
-        b.revision++;
-        this.store.db.prepare('INSERT INTO branch_commits(branch_id,commit_id,revision) VALUES(?,?,?)').run(b.id,commitId,b.revision);
+    private files(workspaceId: string, files: FileRef[]): FileRef[] {
+        const w = this.get<Workspace>(workspaceId,'workspace');
+        const normalized = files.map(file => normalizeFile(file,w.roots));
+        return [...new Map(normalized.map(file => [JSON.stringify(file),file])).values()];
+    }
+    main(workspaceId: string): MainSnapshot {
+        this.workspace(workspaceId);
+        return {workspaceId, revision:this.mainBranch(workspaceId).revision,
+            entries:this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId && !e.removed),
+            removedEntries:this.store.list<MainEntry>('main-entry').filter(e => e.workspaceId === workspaceId && e.removed)};
+    }
+    mainHistory(workspaceId: string, entryId: string): MainEntry[] {
+        this.workspace(workspaceId);
+        const entry = this.get<MainEntry>(entryId,'main-entry');
+        if (entry.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
+        return this.store.list<{entry:MainEntry}>('main-revision').map(r => r.entry).filter(e => e.id === entryId);
+    }
+    /** Caller owns the write transaction. Every revision, including removal, is retained. */
+    private writeMain(workspaceId: string, input: MainInput, entryId?: string, removed = false, sourceWorkId?: string): MainEntry {
+        const parsed = mainInputSchema.parse(input);
+        const b = this.mainBranch(workspaceId);
+        const prior = entryId ? this.get<MainEntry>(entryId,'main-entry') : undefined;
+        if (prior && prior.workspaceId !== workspaceId) throw new DomainError('NOT_FOUND','Main entry not in workspace');
+        if (prior?.removed) throw new DomainError('STATE','Removed entries cannot be edited; create a new entry');
+        const entry: MainEntry = {id:entryId ?? id(),workspaceId,body:parsed.body,files:this.files(workspaceId,parsed.files),
+            revision:++b.revision,removed,actor:this.actor,createdAt:new Date().toISOString(),
+            ...(sourceWorkId ? {sourceWorkId} : prior?.sourceWorkId ? {sourceWorkId:prior.sourceWorkId} : {})};
         this.store.put(b.id,'branch',b);
+        this.store.put(entry.id,'main-entry',entry);
+        const revisionId = id();
+        this.store.insert(revisionId,'main-revision',{id:revisionId,workspaceId,entry});
+        this.audit(removed ? 'main.removed' : prior ? 'main.updated' : 'main.created',entry,workspaceId);
+        return entry;
     }
-    private hasCommit(branchId: string, commitId: string): boolean {
-        return !!this.store.db.prepare('SELECT 1 FROM branch_commits WHERE branch_id=? AND commit_id=?').get(branchId,commitId);
-    }
-    createMerge(sourceBranchId: string, targetBranchId: string, commitIds: string[], expectedRevision: number, expectedMainRevision?: number): MergeRequest {
-        this.guard('merge.create',targetBranchId);
-        this.guard('context.read',sourceBranchId);
+    editMain(workspaceId: string, input: MainInput, expectedRevision: number, entryId?: string, remove = false): MainEntry {
+        this.guard('main.edit',undefined,false,workspaceId);
+        this.get<Workspace>(workspaceId,'workspace');
         return this.store.transaction(() => {
-            const source = this.get<Branch>(sourceBranchId,'branch'), target = this.get<Branch>(targetBranchId,'branch');
-            if (source.workspaceId !== target.workspaceId || source.id === target.id || !commitIds.length || new Set(commitIds).size !== commitIds.length)
-                throw new DomainError('MERGE','Invalid merge');
-            const token = this.revision(target);
-            this.assertRevision(token,{branchRevision:expectedRevision,mainRevision:expectedMainRevision ?? token.mainRevision});
-            const mainId = this.get<Workspace>(source.workspaceId,'workspace').mainBranchId;
-            for (const cid of commitIds) {
-                if (!this.hasCommit(source.id,cid) && !this.hasCommit(mainId,cid)) throw new DomainError('MERGE','Commit absent from source');
-                if (this.hasCommit(target.id,cid) || (target.id !== mainId && this.hasCommit(mainId,cid)))
-                    throw new DomainError('MERGE','Commit already visible in target');
-            }
-            const incoming = commitIds.map(cid => this.get<ContextCommit>(cid,'commit'));
-            const decisions = incoming.filter(c => c.knowledge.kind === 'decision');
-            if (decisions.some((c,i) => decisions.slice(i+1).some(other => identity(c) === identity(other) || overlaps(c,other))))
-                throw new DomainError('MERGE','Overlapping incoming decisions must be reviewed separately');
-            const existing = this.effective(target,token);
-            const conflicts: Conflict[] = decisions.flatMap(c => existing.filter(e => overlaps(e,c) && e.knowledge.body !== c.knowledge.body)
-                .map(e => ({key:c.knowledge.key,existingCommitId:e.id,incomingCommitId:c.id})));
-            const m: MergeRequest = {id:id(),workspaceId:target.workspaceId,sourceBranchId,targetBranchId,commitIds:[...commitIds],
-                expectedRevision,expectedMainRevision:token.mainRevision,state:'pending'};
-            if (target.restricted || conflicts.length) {
-                const r: Review = {id:id(),mergeId:m.id,state:'pending',conflicts};
-                m.reviewId = r.id;
-                this.store.insert(r.id,'review',r);
-            }
-            this.store.insert(m.id,'merge',m);
-            this.audit('merge.created',m,m.workspaceId);
-            return m;
+            this.checkRevision(workspaceId,expectedRevision);
+            if (remove && !entryId) throw new DomainError('MAIN','Removal requires an existing entry');
+            return this.writeMain(workspaceId,input,entryId,remove);
         });
     }
-    applyMerge(mergeId: string): MergeRequest {
-        const initial = this.get<MergeRequest>(mergeId,'merge');
-        const review = initial.reviewId ? this.get<Review>(initial.reviewId,'review') : undefined;
-        this.guard('merge.apply',initial.targetBranchId,review?.state === 'approved');
+    proposeWork(branchId: string, input: WorkInput): BranchWork {
+        this.guard('work.propose',branchId);
+        const session = this.session();
+        const parsed = workInputSchema.parse(input);
         return this.store.transaction(() => {
-            const m = this.get<MergeRequest>(mergeId,'merge'), b = this.get<Branch>(m.targetBranchId,'branch');
-            if (m.state !== 'pending') throw new DomainError('STATE','Merge is not pending');
-            this.assertRevision(this.revision(b),{branchRevision:m.expectedRevision,mainRevision:m.expectedMainRevision});
-            const r = m.reviewId ? this.get<Review>(m.reviewId,'review') : undefined;
-            if (r && r.state !== 'approved') throw new DomainError('REVIEW','Approval required');
-            const active = this.store.decisions<ContextCommit>(b.id,b.revision);
-            for (const cid of m.commitIds) {
-                const c = this.get<ContextCommit>(cid,'commit');
-                this.attach(b,cid);
-                if (c.knowledge.kind !== 'decision') continue;
-                const rejected = r?.resolutions?.some(choice => choice.incomingCommitId === cid && choice.selectedCommitId !== cid);
-                if (rejected) continue;
-                // Materialized decision choices are append-only; history keeps every proposal.
-                for (const old of active.filter(old => overlaps(old,c) && old.knowledge.body !== c.knowledge.body && identity(old) !== identity(c)))
-                    this.store.recordDecision(b.id,b.revision,identity(old),null);
-                this.store.recordDecision(b.id,b.revision,identity(c),cid);
+            const branch = this.get<Branch>(branchId,'branch');
+            const main = this.main(branch.workspaceId);
+            for (const eventId of parsed.eventIds) {
+                const event = this.store.event<NormalizedEvent>(eventId);
+                if (!event || event.sessionId !== session.id || event.workspaceId !== branch.workspaceId)
+                    throw new DomainError('PROVENANCE','Evidence must belong to the publishing session');
             }
-            m.state = 'applied';
-            this.store.put(m.id,'merge',m);
-            if (r) { r.state = 'resolved'; this.store.put(r.id,'review',r); }
-            this.audit('merge.applied',{merge:m,actor:this.actor},m.workspaceId);
-            return m;
+            if (parsed.conflictsWithMain.some(entryId => !main.entries.some(e => e.id === entryId)))
+                throw new DomainError('MAIN','Incompatibility must reference a current Main entry');
+            const work: BranchWork = {id:id(),workspaceId:branch.workspaceId,branchId,sessionId:session.id,
+                ...parsed,files:this.files(branch.workspaceId,parsed.files),state:'proposed',createdAt:new Date().toISOString()};
+            this.store.insert(work.id,'branch-work',work);
+            branch.revision++;
+            this.store.put(branch.id,'branch',branch);
+            this.audit('work.proposed',work,branch.workspaceId);
+            return work;
         });
     }
-    review(reviewId: string): Review {
-        const r = this.get<Review>(reviewId,'review'), m = this.get<MergeRequest>(r.mergeId,'merge');
-        this.guard('review.read',m.targetBranchId);
-        return r;
+    branchOverview(branchId: string): BranchOverview {
+        this.guard('context.read',branchId);
+        const branch = this.get<Branch>(branchId,'branch');
+        const workspace = this.get<Workspace>(branch.workspaceId,'workspace');
+        const sessions = this.store.list<Session>('session').filter(s => s.branchId === branchId);
+        const activity = this.store.recentSessionEvents(branch.workspaceId,sessions.map(s => s.id));
+        const work = this.store.list<BranchWork>('branch-work').filter(w => w.branchId === branchId);
+        const files = [...work.filter(w => w.state === 'proposed').flatMap(w => w.files),
+            ...activity.flatMap(e => extractTouches(e,workspace.roots).filter(t => t.access === 'write')
+                .map(t => ({rootId:t.rootId!,path:t.path})))];
+        return {branch,sessions,work,files:[...new Map(files.map(f => [JSON.stringify(f),f])).values()],
+            recentActivity:activity,
+            corrections:this.store.list<Correction>('correction').filter(c => c.branchId === branchId)};
     }
-    resolveReview(reviewId: string, decision: 'approved' | 'rejected', resolutions?: ConflictResolution[]): Review {
-        const initial = this.get<Review>(reviewId,'review'), merge = this.get<MergeRequest>(initial.mergeId,'merge');
-        this.guard('review.resolve',merge.targetBranchId);
-        return this.store.transaction(() => {
-            const r = this.get<Review>(reviewId,'review'), m = this.get<MergeRequest>(r.mergeId,'merge');
-            if (r.state !== 'pending' || m.state !== 'pending') throw new DomainError('STATE','Review already decided');
-            this.assertRevision(this.revision(this.get<Branch>(m.targetBranchId,'branch')),{branchRevision:m.expectedRevision,mainRevision:m.expectedMainRevision});
-            if (resolutions !== undefined) {
-                if (decision !== 'approved' || resolutions.length !== r.conflicts.length
-                    || new Set(resolutions.map(c => JSON.stringify([c.existingCommitId,c.incomingCommitId]))).size !== resolutions.length
-                    || resolutions.some(choice => !r.conflicts.some(c => c.existingCommitId === choice.existingCommitId && c.incomingCommitId === choice.incomingCommitId)
-                        || ![choice.existingCommitId,choice.incomingCommitId].includes(choice.selectedCommitId)))
-                    throw new DomainError('RESOLUTION','Select one existing or incoming commit for each conflict');
-                // A proposal is accepted or retained as a whole, never partially by impact region.
-                for (const cid of m.commitIds) {
-                    const choices = resolutions.filter(c => c.incomingCommitId === cid);
-                    if (choices.some(c => c.selectedCommitId === cid) && choices.some(c => c.selectedCommitId !== cid))
-                        throw new DomainError('RESOLUTION','Overlapping conflicts must agree on whether to accept the incoming decision');
-                }
-                for (const existingId of new Set(resolutions.map(c => c.existingCommitId))) {
-                    const choices = resolutions.filter(c => c.existingCommitId === existingId);
-                    if (choices.some(c => c.selectedCommitId === existingId) && choices.some(c => c.selectedCommitId !== existingId))
-                        throw new DomainError('RESOLUTION','An existing decision cannot be both retained and superseded');
-                }
+    private signal(workspaceId: string, branchIds: string[], files: FileRef[], evidenceIds: string[], explanation: string, mainEntryId?: string): Conflict {
+        const stable = JSON.stringify([workspaceId,[...branchIds].sort(),files,[...evidenceIds].sort(),mainEntryId]);
+        return {id:`conflict:${createHash('sha256').update(stable).digest('hex').slice(0,24)}`,workspaceId,branchIds,files,evidenceIds,explanation,
+            ...(mainEntryId ? {mainEntryId} : {}),status:'potential'};
+    }
+    conflicts(workspaceId: string): Conflict[] {
+        const w = this.workspace(workspaceId);
+        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => this.branchOverview(b.id));
+        const main = this.main(workspaceId);
+        const signals: Conflict[] = [];
+        const evidence = (branch: BranchOverview, file: FileRef) => [
+            ...branch.work.filter(w => w.state === 'proposed' && w.files.some(f => f.rootId === file.rootId && f.path === file.path)).map(w => w.id),
+            ...branch.recentActivity.filter(e => extractTouches(e,w.roots).some(t => t.access === 'write' && t.rootId === file.rootId && t.path === file.path)).map(e => e.id),
+        ];
+        for (let i = 0; i < branches.length; i++) for (const other of branches.slice(i+1)) {
+            const branch = branches[i]!;
+            for (const file of branch.files.filter(f => other.files.some(o => f.rootId === o.rootId && f.path === o.path))) {
+                signals.push(this.signal(workspaceId,[branch.branch.id,other.branch.id],[file],[...evidence(branch,file),...evidence(other,file)],
+                    'Both branches report changes or intentions for this file. Inspect their work; overlap alone does not establish incompatibility.'));
             }
-            r.state = decision;
-            r.decision = decision;
-            r.decidedBy = this.actor.type === 'human' ? this.actor.id : undefined;
-            if (decision === 'approved') r.resolutions = resolutions ?? r.conflicts.map(c => ({...c,selectedCommitId:c.incomingCommitId}));
-            this.store.put(r.id,'review',r);
-            if (decision === 'rejected') { m.state = 'rejected'; this.store.put(m.id,'merge',m); }
-            this.audit('review.decided',{review:r,actor:this.actor},m.workspaceId);
-            return r;
+        }
+        for (const branch of branches) for (const entry of main.entries) {
+            const files = branch.files.filter(file => entry.files.some(f => f.rootId === file.rootId && f.path === file.path));
+            if (files.length) signals.push(this.signal(workspaceId,[branch.branch.id],files,
+                [...files.flatMap(file => evidence(branch,file)),`${entry.id}:${entry.revision}`],
+                'This branch affects a file referenced by Main. Check the explicit shared expectation; file overlap is only a potential conflict.',entry.id));
+        }
+        for (const branch of branches) for (const work of branch.work.filter(w => w.state === 'proposed')) {
+            for (const entryId of work.conflictsWithMain) {
+                const entry = main.entries.find(e => e.id === entryId);
+                if (entry) signals.push(this.signal(workspaceId,[branch.branch.id],work.files,[work.id,`${entry.id}:${entry.revision}`],
+                    'The agent explicitly reported that this work may conflict with a Main requirement. Human assessment is required.',entryId));
+            }
+        }
+        const stored = this.store.list<Conflict>('conflict').filter(c => c.workspaceId === workspaceId);
+        const result = new Map(signals.map(c => [c.id,c]));
+        for (const conflict of stored) result.set(conflict.id,conflict);
+        return [...result.values()];
+    }
+    reportConflict(workspaceId: string, input: {branchIds:string[];mainEntryId?:string;explanation:string}): Conflict {
+        this.guard('conflict.decide',undefined,false,workspaceId);
+        const w = this.workspace(workspaceId);
+        if (!input.explanation.trim() || !input.branchIds.length || new Set(input.branchIds).size !== input.branchIds.length
+            || input.branchIds.some(b => !this.branches(workspaceId).some(branch => branch.id === b && b !== w.mainBranchId)))
+            throw new DomainError('CONFLICT','Report requires relevant branches and an explanation');
+        if (input.mainEntryId && !this.main(workspaceId).entries.some(e => e.id === input.mainEntryId))
+            throw new DomainError('MAIN','Main entry not found');
+        const c: Conflict = {id:id(),workspaceId,branchIds:input.branchIds,mainEntryId:input.mainEntryId,
+            files:[],evidenceIds:[],explanation:input.explanation.trim(),status:'potential'};
+        return this.store.transaction(() => {this.store.insert(c.id,'conflict',c);this.audit('conflict.reported',{conflict:c,actor:this.actor},workspaceId);return c;});
+    }
+    decideConflict(workspaceId: string, conflictId: string, status: Conflict['status'], explanation: string): Conflict {
+        this.guard('conflict.decide',undefined,false,workspaceId);
+        if (!['potential','confirmed','resolved','dismissed'].includes(status) || !explanation.trim())
+            throw new DomainError('CONFLICT','A valid status and human explanation are required');
+        const c = this.conflicts(workspaceId).find(c => c.id === conflictId);
+        if (!c) throw new DomainError('NOT_FOUND','Conflict not found');
+        c.status = status; c.explanation = explanation.trim();
+        c.decidedBy = this.actor.type === 'human' ? this.actor.id : undefined;
+        c.updatedAt = new Date().toISOString();
+        return this.store.transaction(() => {this.store.put(c.id,'conflict',c);this.audit('conflict.decided',{conflict:c,actor:this.actor},workspaceId);return c;});
+    }
+    sendCorrection(branchId: string, body: string): Correction {
+        this.guard('correction.send',branchId);
+        const branch = this.get<Branch>(branchId,'branch');
+        if (!body.trim() || branch.id === this.mainBranch(branch.workspaceId).id)
+            throw new DomainError('CORRECTION','A correction requires text and an independent branch');
+        const correction: Correction = {id:id(),workspaceId:branch.workspaceId,branchId,body:body.trim(),
+            mainRevision:this.main(branch.workspaceId).revision,actor:this.actor,createdAt:new Date().toISOString()};
+        return this.store.transaction(() => {this.store.insert(correction.id,'correction',correction);this.audit('correction.sent',correction,branch.workspaceId);return correction;});
+    }
+    merges(workspaceId: string): Merge[] {
+        this.workspace(workspaceId);
+        return this.store.list<Merge>('acceptance').filter(m => m.workspaceId === workspaceId);
+    }
+    /** Accept work records and shared conclusions only. This method never touches source files or Git. */
+    decideMerge(branchId: string, workIds: string[], decision: 'accepted' | 'rejected', expectedMainRevision: number): Merge {
+        this.guard('merge.decide',branchId);
+        const branch = this.get<Branch>(branchId,'branch');
+        return this.store.transaction(() => {
+            this.checkRevision(branch.workspaceId,expectedMainRevision);
+            if (!['accepted','rejected'].includes(decision) || !workIds.length || new Set(workIds).size !== workIds.length)
+                throw new DomainError('MERGE','Select distinct proposed work records');
+            const works = workIds.map(workId => this.get<BranchWork>(workId,'branch-work'));
+            if (works.some(work => work.branchId !== branchId || work.state !== 'proposed'))
+                throw new DomainError('MERGE','Work must be pending on the selected branch');
+            for (const work of works) {
+                if (decision === 'accepted') this.writeMain(branch.workspaceId,{body:work.body,files:work.files},undefined,false,work.id);
+                work.state = decision;
+                this.store.put(work.id,'branch-work',work);
+            }
+            branch.revision++;
+            this.store.put(branch.id,'branch',branch);
+            const merge: Merge = {id:id(),workspaceId:branch.workspaceId,sourceBranchId:branchId,workIds:[...workIds],
+                state:decision,mainRevision:this.mainBranch(branch.workspaceId).revision,actor:this.actor,createdAt:new Date().toISOString()};
+            this.store.insert(merge.id,'acceptance',merge);
+            this.audit('merge.decided',merge,branch.workspaceId);
+            return merge;
         });
     }
-    /** Example enforcement boundary. External side effects are not SQLite transactions. */
+    supervision(workspaceId: string): SupervisionContext {
+        const w = this.workspace(workspaceId);
+        const branches = this.branches(workspaceId).filter(b => b.id !== w.mainBranchId).map(b => this.branchOverview(b.id));
+        const ownBranch = this.actor.type === 'agent' ? this.session().branchId : undefined;
+        return {main:this.main(workspaceId),branches,conflicts:this.conflicts(workspaceId),
+            corrections:branches.filter(b => !ownBranch || b.branch.id === ownBranch).flatMap(b => b.corrections)};
+    }
+    /** Native runtimes retain responsibility for executing approved actions. */
     executeControlled<T>(branchId: string, action: () => T): T {
         this.guard('controlled.execute',branchId);
         const result = action();
@@ -330,4 +335,4 @@ export class AgentreeService {
         return result;
     }
 }
-export type ApplicationService = Pick<AgentreeService, 'workspace' | 'branches' | 'lookup' | 'contextRevision' | 'snapshot' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'publish' | 'context' | 'createMerge' | 'applyMerge' | 'review' | 'resolveReview' | 'authorize' | 'executeControlled'>;
+export type ApplicationService = Pick<AgentreeService, 'workspace' | 'branches' | 'events' | 'createWorkspace' | 'createBranch' | 'registerSession' | 'ingest' | 'main' | 'mainHistory' | 'editMain' | 'proposeWork' | 'branchOverview' | 'conflicts' | 'reportConflict' | 'decideConflict' | 'sendCorrection' | 'merges' | 'decideMerge' | 'supervision' | 'authorize' | 'executeControlled'>;

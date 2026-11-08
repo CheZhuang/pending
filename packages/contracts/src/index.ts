@@ -21,7 +21,6 @@ export interface Branch {
     workspaceId: string;
     name: string;
     revision: number;
-    restricted: boolean;
 }
 export interface Agent {
     id: string;
@@ -35,48 +34,54 @@ export interface Session {
     nativeId: string;
     runtime: string;
 }
-export const scopeSchema = z.discriminatedUnion('type', [z.object({ type: z.literal('workspace') }), z.object({ type: z.literal('folder'), path: z.string().min(1), rootId: z.string().min(1).optional() }), z.object({ type: z.literal('file'), path: z.string().min(1), rootId: z.string().min(1).optional() }), z.object({ type: z.literal('task'), taskId: z.string().min(1) })]);
-export type Scope = z.infer<typeof scopeSchema>;
-export const knowledgeSchema = z.object({ kind: z.enum(['finding', 'decision']), key: z.string().min(1), body: z.string().min(1), scope: scopeSchema, impactScope: scopeSchema.optional() });
-export type Knowledge = z.infer<typeof knowledgeSchema>;
-export interface ContextCommit {
-    id: string;
-    workspaceId: string;
-    branchId: string;
-    revision: number;
-    knowledge: Knowledge;
-    provenance: {
-        sessionId: string;
-        eventIds: string[];
-    };
-    createdAt: string;
+/** Paths are workspace-root relative. Branches are logical work records, never Git branches. */
+export const fileRefSchema = z.object({ rootId: z.string().min(1), path: z.string().min(1) });
+export type FileRef = z.infer<typeof fileRefSchema>;
+export const workInputSchema = z.object({
+    body: z.string().trim().min(1), files: z.array(fileRefSchema).default([]),
+    intent: z.string().trim().min(1).optional(), eventIds: z.array(z.string().min(1)).default([]),
+    conflictsWithMain: z.array(z.string().min(1)).default([]),
+});
+export type WorkInput = z.input<typeof workInputSchema>;
+export interface BranchWork {
+    id: string; workspaceId: string; branchId: string; sessionId: string;
+    body: string; intent?: string; files: FileRef[]; eventIds: string[]; conflictsWithMain: string[];
+    state: 'proposed' | 'accepted' | 'rejected'; createdAt: string;
 }
-export interface MergeRequest {
-    id: string;
-    workspaceId: string;
-    sourceBranchId: string;
-    targetBranchId: string;
-    commitIds: string[];
-    expectedRevision: number;
-    expectedMainRevision: number;
-    state: 'pending' | 'applied' | 'rejected';
-    reviewId?: string;
+export const mainInputSchema = z.object({ body: z.string().trim().min(1), files: z.array(fileRefSchema).default([]) });
+export type MainInput = z.input<typeof mainInputSchema>;
+export interface MainEntry {
+    id: string; workspaceId: string; body: string; files: FileRef[];
+    revision: number; removed: boolean; actor: Actor; createdAt: string;
+    sourceWorkId?: string; legacyCommitId?: string;
 }
+export interface MainSnapshot { workspaceId: string; revision: number; entries: MainEntry[]; removedEntries: MainEntry[]; }
 export interface Conflict {
-    key: string;
-    existingCommitId: string;
-    incomingCommitId: string;
+    id: string; workspaceId: string; branchIds: string[]; mainEntryId?: string;
+    files: FileRef[]; evidenceIds: string[]; explanation: string;
+    status: 'potential' | 'confirmed' | 'resolved' | 'dismissed';
+    decidedBy?: string; updatedAt?: string;
 }
-export interface Review {
-    id: string;
-    mergeId: string;
-    state: 'pending' | 'approved' | 'rejected' | 'resolved';
-    conflicts: Conflict[];
-    decidedBy?: string;
-    decision?: 'approved' | 'rejected';
-    resolutions?: ConflictResolution[];
+/** Human acceptance of work records into Main; never a Git/source-code merge. */
+export interface Merge {
+    id: string; workspaceId: string; sourceBranchId: string; workIds: string[];
+    state: 'accepted' | 'rejected'; mainRevision: number; actor: Actor; createdAt: string;
 }
-export type Operation = 'workspace.create' | 'branch.create' | 'session.register' | 'event.ingest' | 'context.publish' | 'context.read' | 'merge.create' | 'merge.apply' | 'review.resolve' | 'review.read' | 'controlled.execute';
+export interface Correction {
+    id: string; workspaceId: string; branchId: string; body: string;
+    mainRevision: number; actor: Actor; createdAt: string;
+}
+export interface BranchOverview {
+    branch: Branch; sessions: Session[]; work: BranchWork[]; files: FileRef[];
+    recentActivity: SequencedEvent[]; corrections: Correction[];
+}
+export interface SupervisionContext {
+    main: MainSnapshot; branches: BranchOverview[]; conflicts: Conflict[];
+    corrections: Correction[];
+}
+export type Operation = 'workspace.create' | 'branch.create' | 'session.register' | 'event.ingest'
+    | 'context.read' | 'work.propose' | 'main.edit' | 'merge.decide' | 'conflict.decide'
+    | 'correction.send' | 'controlled.execute';
 export interface PolicyDecision {
     id: string;
     actor: Actor;
@@ -100,28 +105,6 @@ export class DomainError extends Error {
     constructor(public code: string, message: string) { super(message); }
 }
 
-/** Revisions count attachments, not commits authored on another branch. */
-export interface ContextRevision {
-    branchRevision: number;
-    mainRevision: number;
-}
-export interface ContextEntry {
-    commit: ContextCommit;
-    branchId: string;
-    revision: number;
-}
-export interface ContextSnapshot {
-    branchId: string;
-    revision: ContextRevision;
-    entries: ContextEntry[];
-    history: ContextCommit[];
-    knowledge: ContextCommit[];
-}
-export interface ConflictResolution {
-    existingCommitId: string;
-    incomingCommitId: string;
-    selectedCommitId: string;
-}
 export interface EventQuery {
     afterSequence?: number;
     throughSequence?: number;
