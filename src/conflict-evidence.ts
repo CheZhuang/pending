@@ -131,7 +131,9 @@ async function collectOne(workspace: Workspace, file: FileRef, runner: GitRunner
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') currentState.unavailableReason = 'File could not be inspected';
   }
   try {
-    const repo = await boundedGit(runner, target.root, ['rev-parse', '--show-toplevel'], deadline);
+    // Compare real paths on both sides: the workspace root is already resolved, and Git may
+    // report the toplevel through a symlink (macOS /var -> /private/var) or another spelling.
+    const repo = await realpath(resolve(await boundedGit(runner, target.root, ['rev-parse', '--show-toplevel'], deadline)));
     const repoPath = relative(repo, target.absolute).split(sep).join('/');
     if (!repoPath || !within(resolve(repo), resolve(repo, repoPath))) throw new Error('Workspace file is outside the Git checkout');
     const gitStatus = await boundedGit(runner, repo, ['status', '--short', '--untracked-files=all', '--', repoPath], deadline) || 'clean';
