@@ -3,7 +3,8 @@
 // The admin token is only sent once, to pair the browser; it is never stored.
 import { ApiError } from './errors.js';
 
-const BASE = (import.meta.env.VITE_GATEWAY_URL || 'http://localhost:8787').replace(/\/$/, '');
+// import.meta.env is Vite-only; the optional chain keeps this module loadable in node tests.
+const BASE = (import.meta.env?.VITE_GATEWAY_URL || 'http://localhost:8787').replace(/\/$/, '');
 
 async function request(path, { method = 'GET', body, token } = {}) {
   let response;
@@ -25,10 +26,18 @@ async function request(path, { method = 'GET', body, token } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!response.ok) {
     const error = data?.error ?? {};
-    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, error.message ?? response.statusText);
+    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, error.message ?? response.statusText, error.details);
   }
   return data;
 }
+
+const unsupported = (what) => new ApiError(501, 'UNSUPPORTED', `${what} is not available on this gateway (needs the Main history API, backend PR #20)`);
+// Without PR #20 the old routes reject a restore body (400 BODY / 404): nothing is written.
+const rollbackError = (error) => {
+  const oldRoute = error instanceof ApiError && ((error.status === 404 && error.message === 'Route not found') || (error.status === 400 && error.code === 'BODY'));
+  if (oldRoute) throw unsupported('Main restore');
+  throw error;
+};
 
 export const live = {
   mode: 'live',
@@ -46,6 +55,23 @@ export const live = {
   updateMain: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`, { method: 'POST', body }),
   updateMainEntry: (workspaceId, entryId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}`, { method: 'POST', body }),
   mainHistory: (workspaceId, entryId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}/history`),
+  // Main history and rollback (docs/MAIN_API.md, backend PR #20). A gateway without
+  // that PR answers these GETs with the *current* snapshot (the old route reads
+  // "history"/"preview" as an entry id), so the responses are shape-checked:
+  // showing the current Main as a historical preview would be worse than an error.
+  mainRevisions: async (workspaceId) => {
+    const result = await request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/history`);
+    if (!Array.isArray(result)) throw unsupported('Main revision history');
+    return result;
+  },
+  mainPreview: async (workspaceId, revision) => {
+    const result = await request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/preview?revision=${encodeURIComponent(revision)}`);
+    if (!result || result.revision !== revision) throw unsupported('Main snapshot preview');
+    return result;
+  },
+  removeMainEntry: (workspaceId, entryId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}/remove`, { method: 'POST', body }).catch(rollbackError),
+  restoreMain: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/restore`, { method: 'POST', body }).catch(rollbackError),
+  restoreMainEntry: (workspaceId, entryId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main/${encodeURIComponent(entryId)}/restore`, { method: 'POST', body }).catch(rollbackError),
   decideConflict: (workspaceId, id, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts/${encodeURIComponent(id)}`, { method: 'POST', body }),
   reportConflict: (workspaceId, body) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/conflicts`, { method: 'POST', body }),
   branchWork: (branchId) => request(`/v1/branches/${encodeURIComponent(branchId)}/work`),
@@ -57,6 +83,12 @@ export const live = {
 
   events: (workspaceId, { after = 0, limit = 1000 } = {}) =>
     request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/events?after=${after}&limit=${limit}`),
+
+  // Human task dispatch (docs/TASK_DISPATCH_API.md).
+  submitTask: (body) => request('/v1/tasks', { method: 'POST', body }),
+  tasks: (sessionId) => request(`/v1/tasks${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
+  task: (id) => request(`/v1/tasks/${encodeURIComponent(id)}`),
+  cancelTask: (id) => request(`/v1/tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 
   approvals: () => request('/v1/approvals'),
   decideApproval: (id, decision, reason) =>

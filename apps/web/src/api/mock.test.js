@@ -16,9 +16,10 @@ test('mock Gateway supports Main history, stale writes, work acceptance and conf
 
   main = await api.main(workspaceId);
   const original = main.entries[0];
+  const before = (await api.mainHistory(workspaceId, original.id)).length;
   await api.updateMainEntry(workspaceId, original.id, { body: 'Updated guidance.', files: original.files, expectedRevision: main.revision });
   const history = await api.mainHistory(workspaceId, original.id);
-  assert.equal(history.length, 2);
+  assert.equal(history.length, before + 1);
   main = await api.main(workspaceId);
   await api.updateMainEntry(workspaceId, original.id, { body: original.body, files: original.files, expectedRevision: main.revision, remove: true });
   assert.ok((await api.main(workspaceId)).removedEntries.some(entry => entry.id === original.id));
@@ -60,7 +61,7 @@ test('a remotely removed entry makes an in-flight edit fail instead of creating 
   const latest = await api.main(workspaceId);
   const target = mainWriteTarget({ editingId: entry.id, editRevision: editTarget.expectedRevision, editWorkspaceId: workspaceId, workspaceId, currentRevision: latest.revision });
   assert.equal(target.entryId, entry.id);
-  await assert.rejects(() => api.updateMainEntry(workspaceId, target.entryId, { body: 'in-flight old text', files: entry.files, expectedRevision: target.expectedRevision }), { code: 'NOT_FOUND' });
+  await assert.rejects(() => api.updateMainEntry(workspaceId, target.entryId, { body: 'in-flight old text', files: entry.files, expectedRevision: target.expectedRevision }), { code: 'STALE' }); // Gateway checks the revision first
   const final = await api.main(workspaceId);
   assert.equal(final.entries.some(item => item.body === 'in-flight old text'), false);
   assert.ok(final.removedEntries.some(item => item.id === entry.id));
