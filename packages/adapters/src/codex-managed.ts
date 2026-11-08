@@ -48,6 +48,11 @@ export async function gatewayCodexApproval(client:NativeGatewayClient,request:{m
 export class ManagedCodex {
   private stopping=false;
   private failure:unknown;
+  private activeTurnId?:string;
+  private dispatchedTaskId?:string;
+  private interruptionSent=false;
+  private deliveryInFlight=false;
+  private deliveryPromise?:Promise<void>;
   private readonly completed=new Map<string,{id:string;status:string;error?:unknown}>();
   private pumpTask?:Promise<void>;
   private constructor(
@@ -114,7 +119,11 @@ export class ManagedCodex {
   }
   async startTurn(prompt:string):Promise<{turn:{id:string}}> {
     if(this.failure)throw this.failure;
-    return this.adapter.startTurn(prompt) as Promise<{turn:{id:string}}>;
+    if(this.activeTurnId||this.deliveryInFlight)throw new Error('Managed Codex is busy with another turn');
+    const result=await this.adapter.startTurn(prompt) as {turn?:{id?:string}};
+    if(!result.turn?.id)throw new Error('Native turn/start returned no turn ID');
+    this.activeTurnId=result.turn.id;
+    return result as {turn:{id:string}};
   }
   async waitForTurn(turnId:string,timeoutMs=180000) {
     const deadline=Date.now()+timeoutMs;
@@ -133,6 +142,7 @@ export class ManagedCodex {
       for(const record of batch.records) {
         const payload=record.payload as {params?:{turn?:{id:string;status:string;error?:unknown}}};
         if(record.type==='turn/completed'&&payload.params?.turn)this.completed.set(payload.params.turn.id,payload.params.turn);
+        if(record.type==='turn/completed'&&payload.params?.turn?.id===this.activeTurnId){this.activeTurnId=undefined;this.dispatchedTaskId=undefined;this.interruptionSent=false;}
       }
       more=batch.hasMore;
     }
@@ -142,9 +152,40 @@ export class ManagedCodex {
       while(!this.stopping) {
         await this.gateway.authorize(); // also stops on kill-requested/revocation
         await this.flush();
+        if(this.dispatchedTaskId&&this.activeTurnId&&!this.interruptionSent){
+          const task=await this.gateway.request(`/v1/native/tasks/${encodeURIComponent(this.dispatchedTaskId)}`) as {status:string};
+          if(task.status==='cancel-requested'){
+            this.interruptionSent=true;
+            await this.adapter.interruptTurn(this.activeTurnId).catch(()=>undefined);
+          }
+        }
+        const next=await this.gateway.request(`/v1/native/tasks/next${this.activeTurnId||this.deliveryInFlight?'?busy=1':''}`) as {id:string;instructions:string;mainContext?:{entries:{body:string}[]}|null}|null;
+        if(next&&!this.activeTurnId&&!this.deliveryInFlight){
+          this.dispatchedTaskId=next.id;
+          this.deliveryInFlight=true;
+          this.deliveryPromise=this.deliver(next).finally(()=>{this.deliveryInFlight=false;});
+        }
         await new Promise(resolve=>setTimeout(resolve,100));
       }
     }catch(error){this.failure=error;this.stopping=true;await this.adapter.close();}
+  }
+  private async deliver(next:{id:string;instructions:string;mainContext?:{entries:{body:string}[]}|null}):Promise<void>{
+    try{
+      const latest=await this.gateway.request(`/v1/native/tasks/${encodeURIComponent(next.id)}`) as {status:string};
+      if(latest.status==='cancel-requested'){
+        await this.gateway.request(`/v1/native/tasks/${encodeURIComponent(next.id)}/unavailable`,'POST',{reason:'Cancelled before native start'});
+        this.dispatchedTaskId=undefined;
+        return;
+      }
+      const prompt=next.mainContext?.entries?.length?`${next.instructions}\n\nRelevant human Main context:\n${next.mainContext.entries.map(e=>`- ${e.body}`).join('\n')}`:next.instructions;
+      const result=await this.adapter.startTurn(prompt) as {turn?:{id?:string}};
+      if(!result.turn?.id)throw new Error('Native turn/start returned no turn ID');
+      this.activeTurnId=result.turn.id;
+      await this.gateway.request(`/v1/native/tasks/${encodeURIComponent(next.id)}/accepted`,'POST',{nativeTurnId:result.turn.id});
+    }catch(error){
+      await this.gateway.request(`/v1/native/tasks/${encodeURIComponent(next.id)}/unavailable`,'POST',{reason:error instanceof Error?error.message:String(error)}).catch(()=>undefined);
+      this.dispatchedTaskId=undefined;
+    }
   }
   async close():Promise<void> {
     this.stopping=true;
@@ -152,6 +193,7 @@ export class ManagedCodex {
       await this.pumpTask;
       // Stop native work before the final drain, then end only the logical session.
       await this.adapter.close();
+      await this.deliveryPromise?.catch(()=>undefined);
       if(!this.failure) {
         await this.flush();
         await this.gateway.end();
