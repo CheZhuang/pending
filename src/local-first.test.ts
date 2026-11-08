@@ -113,6 +113,10 @@ test('the local server serves the Console shell, deep links, and built assets sa
     const root = await fetch(staticUrl);
     assert.equal(root.status, 200);
     assert.match(await root.text(), /Local Console/);
+    const navigationHeaders = { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+    assert.equal(await rawStatus(staticUrl, navigationHeaders), 200, 'opening the public Console shell from another site is allowed');
+    assert.equal(await rawStatus(`${staticUrl}/v1/workspaces`, navigationHeaders), 403, 'navigation headers never bypass API origin checks');
+    assert.equal((await fetch(staticUrl, { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403, 'cross-site subresource requests remain blocked');
     const deepLink = await fetch(`${staticUrl}/workspaces/example`);
     assert.equal(deepLink.status, 200);
     assert.match(deepLink.headers.get('content-type') ?? '', /text\/html/);
@@ -158,6 +162,17 @@ async function hostStatus(host: string): Promise<number> {
   return new Promise((resolveStatus, reject) => {
     const url = new URL('/v1/workspaces', baseUrl);
     const req = httpRequest({ hostname: url.hostname, port: Number(url.port), path: url.pathname, method: 'GET', headers: { host } }, response => {
+      response.resume();
+      response.on('end', () => resolveStatus(response.statusCode ?? 0));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function rawStatus(url: string, headers: Record<string, string>): Promise<number> {
+  return new Promise((resolveStatus, reject) => {
+    const req = httpRequest(url, { method: 'GET', headers }, response => {
       response.resume();
       response.on('end', () => resolveStatus(response.statusCode ?? 0));
     });

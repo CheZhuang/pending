@@ -1,5 +1,7 @@
 # Local security model
 
+Top-level browser GET navigations to `/` and `/index.html` may open the public Console shell from another site. This exception requires Fetch Metadata identifying a document navigation; it never applies to `/v1/` API requests, subresources, or writes.
+
 Agentree is a single-user local application listening only on loopback. An ordinary HTTP request has no human authority, even with a localhost Host, a trusted Origin, or spoofed actor fields. Human operations require a local capability; agent operations require a session capability. There are no accounts, passwords, manual token copying or browser pairing.
 
 ## Automatic human access
