@@ -14,9 +14,9 @@ export class ApiError extends Error {
 const HINTS = {
   UNAUTHORIZED: 'The Gateway did not accept this request. Check that the Console is using a supported local origin and that Gateway access is valid.',
   DENY: 'The Gateway refused this request. Check its local access rules and the Gateway message.',
-  ORIGIN: 'This Console origin is not allowed. Open Agentree from the local Gateway address or configure the supported development origin.',
-  UNSUPPORTED_ORIGIN: 'This Console origin is not allowed. Open Agentree from the local Gateway address or configure the supported development origin.',
-  INVALID_ORIGIN: 'This Console origin is not allowed. Open Agentree from the local Gateway address or configure the supported development origin.',
+  ORIGIN: 'This Console origin is not allowed. Open PendingTree from the local Gateway address or configure the supported development origin.',
+  UNSUPPORTED_ORIGIN: 'This Console origin is not allowed. Open PendingTree from the local Gateway address or configure the supported development origin.',
+  INVALID_ORIGIN: 'This Console origin is not allowed. Open PendingTree from the local Gateway address or configure the supported development origin.',
   INVALID_ACCESS: 'The Gateway rejected local access. Check that the Gateway is running with the expected local data directory.',
   CONFLICT: 'Conflict evidence changed or needs review. Refresh the work, review the warnings, and explicitly override only if you want to accept it.',
   STATE: 'The record changed state on the server. The list has been refreshed.',

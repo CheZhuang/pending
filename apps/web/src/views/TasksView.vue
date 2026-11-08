@@ -80,7 +80,7 @@ function cancel(task) {
   dialog.warning({
     title: delivered ? 'Interrupt this task?' : 'Cancel this task?',
     content: delivered
-      ? 'Agentree asks the runner to interrupt the native turn. Work already done by the agent is not undone, and the final status waits for native evidence.'
+      ? 'PendingTree asks the runner to interrupt the native turn. Work already done by the agent is not undone, and the final status waits for native evidence.'
       : 'The task has not been delivered yet; it will not be sent to the agent.',
     positiveText: delivered ? 'Interrupt' : 'Cancel task', negativeText: 'Keep it',
     onPositiveClick: () => doCancel(task),

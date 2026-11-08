@@ -18,7 +18,7 @@ const consoleReady = (async () => {
     method: 'POST', credentials: 'include',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket }),
   });
-  if (!response.ok) throw new ApiError(response.status, 'UNAUTHORIZED', 'Console access expired. Open Agentree again from the local CLI.');
+  if (!response.ok) throw new ApiError(response.status, 'UNAUTHORIZED', 'Console access expired. Open PendingTree again from the local CLI.');
 })();
 // request()/stream() surface errors; avoid an unhandled rejection during startup.
 consoleReady.catch(() => {});
@@ -44,7 +44,7 @@ async function request(path, { method = 'GET', body } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = null; }
   if (!response.ok) {
     const error = data?.error ?? {};
-    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, response.status === 401 ? 'Open Agentree from the local CLI to authorize this Console.' : error.message ?? response.statusText, error.details);
+    throw new ApiError(response.status, error.code ?? `HTTP_${response.status}`, response.status === 401 ? 'Open PendingTree from the local CLI to authorize this Console.' : error.message ?? response.statusText, error.details);
   }
   return data;
 }
