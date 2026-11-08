@@ -139,3 +139,30 @@ test('untracked evidence uses the platform null device and survives unavailable 
     assert.equal(failed?.workingTreeDiff,'');
   } finally {await rm(root,{recursive:true,force:true});}
 });
+
+test('a Git toplevel reported through a symlink still matches the resolved workspace root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'conflict-real-'));
+  const alias = `${root}-alias`;
+  try {
+    await writeFile(join(root, 'note.txt'), 'x');
+    // A junction needs no privilege on Windows; elsewhere the type is ignored.
+    await symlink(root, alias, 'junction');
+    const workspace: Workspace = { id: 'w', name: 'test', roots: [{ id: 'r', path: root }], mainBranchId: 'm' };
+    const seen: string[][] = [];
+    const runner: GitRunner = async (_cwd, args) => {
+      seen.push(args);
+      if (args[0] === 'rev-parse') return alias; // the same checkout, spelled through the link
+      if (args[0] === 'status') return ' M note.txt';
+      if (args[0] === 'diff') return '+x';
+      return '';
+    };
+    const [evidence] = await collectConflictEvidence(workspace, conflict(['note.txt']), runner);
+    assert.equal(evidence?.gitError, undefined);
+    assert.equal(evidence?.gitStatus, ' M note.txt');
+    assert.equal(evidence?.workingTreeDiff, '+x');
+    assert.deepEqual(seen.find(args => args[0] === 'status')?.at(-1), 'note.txt');
+  } finally {
+    await rm(alias, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
