@@ -6,6 +6,8 @@ The workflow is: write expectations in **Main**, inspect agent **Branches**, ass
 
 Use Node.js 24+: `npm ci && npm run build && npm start`. The Gateway listens on `127.0.0.1:8787`. See [Gateway API](docs/GATEWAY_API.md) and [native setup](docs/NATIVE_AGENTS.md). Start the Vue Console with `cd apps/web && npm ci && npm run dev:live`, then pair with the local Gateway. Main editing, branch inspection, conflict disposition, corrections and tool approvals are human workflows in the Console.
 
+For a managed Codex workflow, leave the Gateway running and start `npm run codex:managed -- --cwd /path/to/project` in another terminal. It prints a session ID. Submit work with `npm run task -- submit --session <session-id> --instructions "..." --include-main`; inspect it with `npm run task -- list --session <session-id>` or `npm run task -- status <task-id>`. The Vue task form is not available yet.
+
 Validate with `npm run typecheck`, `npm test`, `npm run build`, `npm run demo`, and `npm --prefix apps/web run build`. The deterministic demo exercises two authenticated MCP clients; real native runs require locally installed runtimes and credentials.
 
 See [architecture, ownership and migration](docs/ARCHITECTURE.md), the [pre-implementation plan](docs/SUPERVISION_PLAN.md), and [verification report](docs/SUPERVISION_VERIFICATION.md).

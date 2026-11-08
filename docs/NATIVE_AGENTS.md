@@ -19,6 +19,25 @@ The teammate with Claude Code can run `npm run smoke:native -- claude` from the 
 
 Install and authenticate `codex` and use a Node.js 24 runtime. `ManagedCodex.open` owns the App Server connection and registers its native thread ID with Gateway. Example from the repository root after building:
 
+For normal use, the repository includes a short runner command. Start the Gateway in one terminal, then run this from the Agentree repository in another (set `--cwd` to the project Codex should work in):
+
+```sh
+npm run codex:managed -- --cwd /absolute/path/to/your/project
+```
+
+It reads the local admin token, registers a managed Codex session, and prints its session ID. Keep the terminal open; `Ctrl+C` ends the session. In a third terminal, submit and inspect tasks without constructing REST requests:
+
+```sh
+npm run task -- submit --session <session-id> --instructions "Review the login flow and report one concrete issue." --include-main
+npm run task -- list --session <session-id>
+npm run task -- status <task-id>
+npm run task -- cancel <task-id>
+```
+
+The helper commands use the same default data directory as the Gateway. For a custom Gateway, set `AGENTREE_GATEWAY_URL`; for a custom data directory, set `GATEWAY_DATA_DIR` for both Gateway and helper processes. `npm run codex:managed -- --help` and `npm run task -- --help` show all options.
+
+The lower-level API remains available through `ManagedCodex.open`:
+
 ```sh
 export HARNESS_ADMIN_TOKEN="$(cat ~/.local/share/agentree/admin-token)"
 node --input-type=module <<'JS'
