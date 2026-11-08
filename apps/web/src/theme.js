@@ -1,5 +1,4 @@
-// Catppuccin Frappé-inspired dark theme for Naive UI, plus the colors used for
-// authority labels and gateway outcomes across the console.
+// Catppuccin Frappé-inspired dark theme for Naive UI.
 import { darkTheme } from 'naive-ui';
 
 export const frappe = {
@@ -10,7 +9,6 @@ export const frappe = {
   overlay0: '#737994', surface2: '#626880', surface1: '#51576d', surface0: '#414559',
   base: '#303446', mantle: '#292c3c', crust: '#232634',
 };
-
 export const theme = darkTheme;
 
 export const themeOverrides = {
@@ -32,18 +30,3 @@ export const themeOverrides = {
   Card: { color: frappe.mantle, borderColor: frappe.surface0 },
   DataTable: { thColor: frappe.crust, tdColor: frappe.mantle, tdColorHover: '#30344a', borderColor: frappe.surface0 },
 };
-
-/**
- * One color per sync authority label (packages/sync/src/authority.ts).
- * Yellow/peach = unverified agent output, green/teal = human-reviewed main, grey = no longer in force.
- */
-export const authorityColor = {
-  finding: frappe.yellow,
-  'proposed-decision': frappe.peach,
-  'accepted-finding': frappe.teal,
-  'accepted-decision': frappe.green,
-  'superseded-decision': frappe.overlay0,
-  shadowed: frappe.overlay1,
-};
-
-export const outcomeColor = { allow: frappe.green, deny: frappe.red, 'require-approval': frappe.yellow };

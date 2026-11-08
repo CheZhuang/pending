@@ -13,9 +13,7 @@ const HINTS = {
   UNAUTHORIZED: 'Pair this browser with the admin token first.',
   DENY: 'The gateway refused this for the current credential. The refusal is in the audit log.',
   STATE: 'Someone already decided this. The list has been refreshed.',
-  STALE: 'Context changed since the merge request was created. Ask the agent to create a new one.',
-  REVIEW: 'The merge needs an approved review before it can be applied.',
-  RESOLUTION: 'Choose existing or incoming for every conflict.',
+  STALE: 'Main changed since you opened this edit. Reload, review the latest reference, then retry.',
   NETWORK: 'The gateway is not reachable. Is `npm start` running on port 8787?',
 };
 
