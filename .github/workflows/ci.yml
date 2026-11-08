@@ -22,15 +22,13 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Install Console dependencies
+        run: npm ci --prefix apps/web
       - name: Typecheck source and tests
         run: npm run typecheck
       - name: Run all tests, including Gateway HTTP integration
         run: npm test
-      - name: Build
+      - name: Build backend and Console
         run: npm run build
-      - name: Install Console dependencies
-        run: npm ci --prefix apps/web
       - name: Test Console supervision workflows
         run: npm --prefix apps/web test
-      - name: Build Console
-        run: npm --prefix apps/web run build
