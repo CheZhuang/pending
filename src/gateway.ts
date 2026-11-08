@@ -146,7 +146,10 @@ export function createGateway(options: GatewayOptions) {
             const sameOrigin = origin === `http://${req.headers.host}`;
             if (origin && !sameOrigin && !allowedOrigins.has(origin))
                 throw new DomainError('DENY', 'Console origin is not allowed');
-            if (req.headers['sec-fetch-site'] === 'cross-site' && !origin)
+            const consoleNavigation = method === 'GET' && !!options.consoleDirectory
+                && (path === '/' || path === '/index.html')
+                && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
+            if (req.headers['sec-fetch-site'] === 'cross-site' && !origin && !consoleNavigation)
                 throw new DomainError('DENY', 'Cross-site requests require an allowed Origin');
             if (!origin && req.headers['sec-fetch-site'] && method !== 'GET' && method !== 'HEAD')
                 throw new DomainError('DENY', 'Browser writes require an Origin');
