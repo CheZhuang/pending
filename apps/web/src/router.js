@@ -2,7 +2,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 export const routes = [
-  { path: '/', redirect: '/main' },
+  { path: '/', redirect: '/overview' },
   { path: '/overview', name: 'overview', component: () => import('./views/OverviewView.vue'), meta: { title: 'Overview' } },
   { path: '/main', name: 'main', component: () => import('./views/MainView.vue'), meta: { title: 'Main' } },
   { path: '/main/history', name: 'main-history', component: () => import('./views/MainHistoryView.vue'), meta: { title: 'Main history', menu: 'main' } },

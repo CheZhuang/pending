@@ -4,7 +4,7 @@ The Console is the human supervision UI, built with Vue 3, Vite, Naive UI, and V
 
 | Page | Purpose |
 | --- | --- |
-| Overview | Branches, native sessions, runtime capabilities, and stop requests |
+| Overview | Discovered local Claude Code and Codex processes, managed sessions, metadata, activity, and supported actions |
 | Main | Shared reference editing, change previews, removal, entry restoration, provenance, and history |
 | Main history | Global revisions, historical comparisons, and whole-Main or entry restoration |
 | Tasks | Submit instructions with optional Main context, inspect native delivery evidence, and request cancellation |
@@ -39,3 +39,14 @@ npm --prefix apps/web run preview
 `src/api/live.js` and `src/api/mock.js` provide the view-facing API. Gateway responses determine write success and revision checks; errors remain visible to the human. Main history and task dispatch use the [HTTP contracts](../../docs/GATEWAY_API.md). Historical previews are checked against the requested revision; older Gateways show an unsupported error. Task delivery is available only for connected managed Codex runners.
 
 See [architecture](../../docs/ARCHITECTURE.md) for supervision rules and [verification](../../docs/SUPERVISION_VERIFICATION.md) for test coverage.
+
+## Local agent discovery API (frontend contract)
+
+Overview is available without a selected workspace and reads native process discovery from the local Gateway. The discovery endpoint is not yet present on `main`; the Console targets this mock-first contract for Person 2's implementation:
+
+- `GET /v1/discovery/agents` returns `{ refreshedAt, agents, operations? }`.
+- `POST /v1/discovery/refresh` returns the same shape after a discovery scan.
+- Each agent has `id`, `runtime`, `status`, optional `process` (`pid`, `executable`, `startedAt`, `exitedAt`, `exitCode`), `cwd`, optional `workspace` (`id`, `name`, `association`), optional `session` (`id`, `state`, `label`), optional `activity` (`summary`, `observedAt`, `evidence`), and authoritative `capabilities` (`canInspectActivity`, `canDispatchTasks`, `canReviewApprovals`, `canStop`).
+- `operations.canStartManagedAgent` gates the optional start controls. Starting uses `POST /v1/agents/managed` with `{ runtime, cwd? }`.
+
+The UI labels cwd-based workspace matches as inferred, leaves unavailable metadata explicit, and only enables actions listed by the Gateway. Discovery does not imply session ownership or control. No login, pairing, or browser token is used; Gateway origin and access errors use the existing live API error display.
