@@ -11,17 +11,22 @@ Claude's own UI.
 
 ## What works with real runtimes today
 
+Updated after B's PR #16 (`docs/NATIVE_AGENTS.md` has the full enforcement matrix):
+
 | Capability | Claude Code | Codex |
 | --- | --- | --- |
-| Joins a workspace as a governed session | ✅ `demo/managed-claude.mjs` (B's launcher) | ❌ no launcher host yet |
-| Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ❌ approvals not routed (adapter declines them) |
-| Live traffic in the console and CLI | ✅ one record per tool call (policy, pending, decision) | ❌ until a host pushes App Server events |
-| Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ❌ |
-| Publish and sync context, merges (MCP tools) | ❌ no MCP host process for real agents yet | ❌ |
+| Joins a workspace as a governed session | ✅ `demo/managed-claude.mjs` (B's launcher) | ✅ `ManagedCodex` (B) |
+| Tool calls allowed / denied by a human **before** they run | ✅ `PreToolUse` hook → `/v1/decide` | ⚠️ only command-execution, file-change and Agentree MCP approval callbacks; no general interception |
+| Live traffic in the console and CLI | ✅ pre- and post-tool records | ✅ App Server notifications (journalled) |
+| Stop (terminate the run) | ✅ console **Stop** → SIGTERM → exit reported | ✅ Stop revokes the session; the managed thread closes |
+| Publish and sync context, merges (Agentree MCP) | ✅ session-bound MCP configured by the launcher | ✅ session-bound MCP configured by `ManagedCodex` |
 
-For the **collaboration loop** (findings, scoped sync, conflicting decisions, human merge) use
-`npm run demo`. It runs the same sync, MCP, gateway and CLI code with two simulated agents (see `README.md`).
-The gaps above and who owns them are listed at the end.
+**The main demo, Claude Code and Codex working together, is `npm run demo:real`** (section 9). Steps 1–8
+below cover a single governed Claude session, which is the A10 harness part. `npm run demo` remains the
+deterministic fallback with simulated agents.
+
+**Not verified yet:** a real Claude Code run with Agentree MCP (B's Codex smoke passed; the Claude smoke
+`npm run smoke:native -- claude` still needs a machine with Claude Code), and `npm run demo:real` end to end.
 
 ---
 
@@ -158,8 +163,8 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 3. **Deny** `git push --force` with a reason → Claude reports it was blocked.
 4. **Stop** → the session ends, and the terminal shows the termination.
 5. `npm run agentree -- log --audit`: the auditable record of every decision.
-6. Then `npm run demo` and the console's **Context** page for the multi-agent part: findings, scoped sync,
-   the conflict, and the human merge in the branch tree.
+6. Then the multi-agent part: `npm run demo:real` (section 9) with Claude Code and Codex together, shown on the
+   console's **Reviews** and **Context** pages. Fallback: `npm run demo` with simulated agents.
 
 ---
 
@@ -176,18 +181,52 @@ independent, governed Claude Code sessions appear side by side in Overview, Acti
 | `Gateway event stream failed; stopping managed session` | The gateway stopped. The launcher stops Claude rather than run ungoverned. |
 | CLI or console shows an empty workspace | They use a different data directory. Use the same `GATEWAY_DATA_DIR` everywhere. |
 
-## Missing for the full real-agent loop
+## 9. Claude Code and Codex together (the main demo)
 
-1. **MCP host for real agents (B, with A).** A stdio entry point (for example `agentree mcp`) that the launcher
-   passes to Claude via `--mcp-config`, binding the MCP connection to the session through
-   `HARNESS_SESSION_TOKEN` (never a model-supplied id). Once it exists, Claude can call `context_publish`,
-   `context_sync`, `merge_request` and the console's Reviews and Context pages work unchanged.
-2. **Codex launcher host (B).**
-   - Register a `codex` session (`POST /v1/sessions`).
-   - Start `CodexAppServerAdapter.start({ cwd })` and `startTurn(prompt)`.
-   - Push `readEvents` batches to `POST /v1/events` with the session token, saving the cursor in `SqliteCursorStore`.
-   - Map Stop to `interruptTurn` / `close`.
+`demo/real-two-agents.ts` drives the same story as `npm run demo`, with real runtimes on the running gateway,
+so everything appears live in the console:
 
-   Codex tool approvals are not intercepted; the gateway does not claim to control them.
-3. **Claude transcript observation (B).** Ingest Claude Code's session JSONL so messages and non-tool activity
-   show up too. Today only hook-gated tool calls are recorded.
+1. **Codex** joins on branch `Codex` (owns `src/api`), subscribes to `src/api`, reads `src/api/users.ts` and
+   publishes a Finding located in `src/api/users.ts` whose **impact scope** is `src/auth`.
+2. **Claude** joins on branch `Claude` (owns `src/auth`), subscribes to `src/auth`, calls `context_sync` and
+   receives Codex's Finding through the impact scope. It publishes the decision `token-ttl = 15 minutes` and
+   sends a merge request to main. Then it tries `git push --force`, which **you deny** in the console.
+3. **Codex** proposes the conflicting `token-ttl = 60 minutes` and requests a merge.
+4. **You** resolve the conflict in **Reviews** (pick a side, Resolve & apply).
+5. Both agents `context_sync` again and report the accepted decision.
+6. **You** press **Stop** on the Codex session (terminate the run).
+
+**Token cost is kept minimal on purpose:**
+- Claude runs on `haiku` (override with `CLAUDE_MODEL`) with `--max-turns 10` and `--strict-mcp-config`, so only
+  the Agentree MCP server is loaded.
+- Codex **refuses to start unless `CODEX_MODEL` is set explicitly**, so it can never fall back to the default
+  model. Set it to the cheapest model your Codex offers (see the model picker in `codex`). Reasoning effort is
+  forced to `low`, and your other MCP servers are not loaded.
+- The project is three tiny files, and every prompt says not to explore or edit other files.
+
+The script auto-approves only **Agentree MCP** tool calls (collaboration plumbing). Every other tool call
+(Bash, Read, Edit, Codex commands) waits for you in the console. Use `--manual` to approve the MCP calls by
+hand as well.
+
+```bash
+npm start                                    # terminal 1
+```
+
+```bash
+npm --prefix apps/web run dev:live           # terminal 2, open http://localhost:5173
+```
+
+```bash
+CODEX_MODEL=<cheapest model> npm run demo:real -- --check    # terminal 3: preflight, no model calls
+```
+
+```bash
+CODEX_MODEL=<cheapest model> npm run demo:real
+```
+
+`--check` verifies Node 24, the gateway, the admin token, the `claude` and `codex` commands and `CODEX_MODEL`,
+and seeds the project (default `~/agentree-two-agents`, override with `PLAYGROUND`), without sending
+anything to a model.
+
+The real models may not follow the prompts exactly. Rehearse once, record the successful run as a backup
+video, and keep `npm run demo` as the fallback.
