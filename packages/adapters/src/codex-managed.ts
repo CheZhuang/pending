@@ -15,7 +15,6 @@ export interface ManagedCodexOptions {
   cwd:string;
   label?:string;
   branchId?:string;
-  adminToken?:string;
   /** Supply the private registration file to recover an active native session. */
   resumeFile?:string;
   stateDirectory?:string;
@@ -98,9 +97,7 @@ export class ManagedCodex {
         }
         if(!bootstrapDone)throw new Error('Codex bootstrap turn did not complete');
         await adapter.close();adapter=undefined;
-        const token=options.adminToken??process.env.HARNESS_ADMIN_TOKEN;
-        if(!token)throw new Error('Managed Codex registration requires HARNESS_ADMIN_TOKEN');
-        gateway=await NativeGatewayClient.register(options.gatewayUrl,token,{runtime:'codex-app-server',cwd,label:options.label??'Codex',branchId:options.branchId,nativeId});
+        gateway=await NativeGatewayClient.register(options.gatewayUrl,{runtime:'codex-app-server',cwd,label:options.label??'Codex',branchId:options.branchId,nativeId});
         created=true;
       }
       if(gateway.session.runtime!=='codex-app-server')throw new Error('Resume registration is not a Codex App Server session');

@@ -2,7 +2,6 @@
 // change counters views watch to refresh. A plain reactive object, no store library.
 import { reactive } from 'vue';
 import { allEvents, api, mode } from './api/index.js';
-import { ApiError } from './api/errors.js';
 
 const WS_KEY = 'agentree.console.workspace';
 const MAX_EVENTS = 3000;
@@ -10,8 +9,6 @@ const MAX_EVENTS = 3000;
 export const state = reactive({
   mode,
   baseUrl: api.baseUrl,
-  /** true when the gateway said 401: the browser has to be paired with the admin token. */
-  needsLogin: false,
   workspaces: [],
   workspaceId: null,
   /** idle | connecting | live | reconnecting | closed */
@@ -26,14 +23,9 @@ export const state = reactive({
 
 export const workspace = () => state.workspaces.find((w) => w.id === state.workspaceId) ?? null;
 
-/** Run a gateway call; a 401 opens the pairing dialog instead of failing silently. */
+/** Run a gateway call and preserve one error shape for views. */
 export async function guard(fn) {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 401) state.needsLogin = true;
-    throw error;
-  }
+  return fn();
 }
 
 let closeStream = null;
@@ -81,20 +73,13 @@ export async function boot() {
   state.fatal = null;
   try {
     state.workspaces = await guard(() => api.workspaces());
-    state.needsLogin = false;
     let saved = null;
     try { saved = localStorage.getItem(WS_KEY); } catch { /* storage unavailable */ }
     const pick = state.workspaces.find((w) => w.id === saved) ?? state.workspaces.at(-1);
     await selectWorkspace(pick?.id ?? null);
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401)) state.fatal = error;
+    state.fatal = error;
   } finally {
     state.loading = false;
   }
-}
-
-export async function pair(token) {
-  await api.login(token);
-  state.needsLogin = false;
-  await boot();
 }

@@ -14,7 +14,7 @@
 //   CODEX_MODEL=<cheapest codex model> npm run demo:real              # the real run
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
@@ -25,7 +25,7 @@ const has = (flag: string) => args.includes(flag);
 const CHECK = has('--check');
 const MANUAL = has('--manual'); // also approve Agentree MCP calls by hand
 
-const dataDir = process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree');
+const dataDir = process.env.AGENTREE_HOME || process.env.GATEWAY_DATA_DIR || join(homedir(), '.local', 'share', 'agentree');
 const gatewayUrl = process.env.HARNESS_GATEWAY_URL || 'http://127.0.0.1:8787';
 const database = join(dataDir, 'gateway.sqlite');
 const playground = resolve(process.env.PLAYGROUND || join(homedir(), 'agentree-two-agents'));
@@ -46,17 +46,13 @@ function onPath(command: string): boolean {
   return spawnSync('sh', ['-c', `command -v ${JSON.stringify(command)}`], { stdio: 'ignore' }).status === 0;
 }
 
-async function preflight(): Promise<{ token: string }> {
+async function preflight(): Promise<void> {
   step(0, 'Preflight (no model calls)');
   const problems: string[] = [];
   if (Number(process.versions.node.split('.')[0]) < 24) problems.push(`Node ${process.versions.node}: use Node 24+.`);
   if (!onPath(claudeCommand)) problems.push(`"${claudeCommand}" not found: install and log in to Claude Code.`);
   if (!onPath(codexCommand)) problems.push(`"${codexCommand}" not found: install and log in to Codex.`);
   if (!codexModel) problems.push('CODEX_MODEL is not set. Set it to the cheapest model your Codex offers (see /model in `codex`). The script never falls back to the default model.');
-  let token = process.env.HARNESS_ADMIN_TOKEN ?? '';
-  if (!token) {
-    try { token = readFileSync(join(dataDir, 'admin-token'), 'utf8').trim(); } catch { problems.push(`No admin token in ${dataDir}: start the gateway first (npm start).`); }
-  }
   try {
     const health = await fetch(`${gatewayUrl}/health`);
     if (!health.ok) problems.push(`Gateway at ${gatewayUrl} answered ${health.status}.`);
@@ -67,7 +63,6 @@ async function preflight(): Promise<{ token: string }> {
   say(`  approvals ${MANUAL ? 'all by hand in the console' : 'Agentree MCP calls auto-approved by this script; every other tool call by hand'}`);
   if (problems.length) fail(`Not ready:\n  - ${problems.join('\n  - ')}`);
   say('  ✔ ready');
-  return { token };
 }
 
 // ---------------------------------------------------------------- project
@@ -87,11 +82,10 @@ function seedPlayground(): void {
 }
 
 // ---------------------------------------------------------------- gateway (as the human)
-let admin = '';
 const api = async <T>(path: string, body?: unknown): Promise<T> => {
   const response = await fetch(`${gatewayUrl}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { authorization: `Bearer ${admin}`, 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`${body === undefined ? 'GET' : 'POST'} ${path} → ${response.status} ${await response.text()}`);
@@ -146,8 +140,7 @@ async function waitForHuman<T>(what: string, check: () => Promise<T | undefined 
 
 // ---------------------------------------------------------------- scenario
 const RULES = 'Keep it minimal: use as few tool calls and words as possible, do not explore other files.';
-const { token } = await preflight();
-admin = token;
+await preflight();
 seedPlayground();
 if (CHECK) { say('\n--check: project seeded, nothing sent to any model. Run again without --check for the real run.'); process.exit(0); }
 
@@ -157,7 +150,7 @@ let codex: ManagedCodex | undefined;
 try {
   step(1, 'Codex joins as a managed session (branch "Codex", owns src/api)');
   codex = await ManagedCodex.open({
-    gatewayUrl, databasePath: database, cwd: playground, label: 'Codex', adminToken: admin,
+    gatewayUrl, databasePath: database, cwd: playground, label: 'Codex',
     adapter: {
       command: codexCommand,
       args: ['app-server', '--listen', 'stdio://', '-c', `model=${JSON.stringify(codexModel)}`, '-c', 'model_reasoning_effort="low"', '-c', 'mcp_servers={}'],

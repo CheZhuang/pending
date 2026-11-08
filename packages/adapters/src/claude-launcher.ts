@@ -32,14 +32,12 @@ export class HttpManagedClaudeGateway implements ManagedClaudeGateway {
 
   constructor(
     private readonly baseUrl = 'http://localhost:8787',
-    private readonly adminToken = process.env.HARNESS_ADMIN_TOKEN,
   ) {}
 
   async registerSession(input: { runtime: 'claude-code'; cwd: string; label: string; nativeId?:string; branchId?:string }): Promise<ManagedClaudeSession> {
     const response = await fetch(new URL('/v1/sessions', this.baseUrl), {
       method: 'POST', headers: {
         'content-type': 'application/json',
-        ...(this.adminToken ? { authorization: `Bearer ${this.adminToken}` } : {}),
       }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`Gateway session registration failed with HTTP ${response.status}`);
@@ -148,12 +146,12 @@ export async function runManagedClaude(options: ClaudeLaunchOptions): Promise<nu
     await writeFile(settingsPath, JSON.stringify(createClaudeHookSettings(hookCommand)), { mode: 0o600 });
 
     const mcpPath=join(settingsDir,'mcp.json');
-    const database=options.databasePath??process.env.AGENTREE_DATABASE_PATH??join(process.env.GATEWAY_DATA_DIR??join(homedir(),'.local','share','agentree'),'gateway.sqlite');
+    const database=options.databasePath??process.env.AGENTREE_DATABASE_PATH??join(process.env.AGENTREE_HOME??process.env.GATEWAY_DATA_DIR??join(homedir(),'.local','share','agentree'),'gateway.sqlite');
     await writeFile(mcpPath,JSON.stringify({mcpServers:{agentree:nativeMcpConfig(database,{gatewayUrl,sessionId:session.sessionId,sessionToken:session.sessionToken??''})}}),{mode:0o600});
     const claudeArgs = options.args ?? [];
     if(claudeArgs.some(arg=>/^--(settings|session-id|resume|continue|mcp-config)(=|$)/.test(arg)||arg==='-r'||arg==='-c')) throw new Error('Managed Claude owns native identity and configuration; start a fresh session');
     if (claudeArgs.includes('--settings')) throw new Error('Managed Claude owns --settings for its hook configuration');
-    const { HARNESS_ADMIN_TOKEN: _adminToken, HARNESS_SESSION_TOKEN: _priorSessionToken, ...childEnv } = process.env;
+    const { HARNESS_SESSION_TOKEN: _priorSessionToken, ...childEnv } = process.env;
     child = spawn(options.command ?? 'claude', ['--settings', settingsPath, '--session-id',nativeId,'--mcp-config',mcpPath, ...claudeArgs], {
       cwd,
       stdio: 'inherit',

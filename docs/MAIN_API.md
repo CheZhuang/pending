@@ -1,6 +1,6 @@
 # Main editing and history contract
 
-Base path: `/v1/workspaces/:workspaceId/main`. Use the [Gateway authentication](GATEWAY_API.md) admin bearer or paired Console cookie for writes. Session credentials may read their own workspace; agents cannot edit or restore Main. Actor identity always comes from Gateway authentication.
+Base path: `/v1/workspaces/:workspaceId/main`. Writes use [automatic local human access](GATEWAY_API.md). Session credentials may read their own workspace; agents cannot edit or restore Main. Actor identity always comes from Gateway authentication.
 
 | Method and path | Request | Response |
 | --- | --- | --- |

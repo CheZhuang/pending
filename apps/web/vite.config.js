@@ -1,5 +1,5 @@
-// Vite config for the Agentree Web Console. Keep the host on "localhost" so the
-// gateway's SameSite=Strict console cookie works (gateway runs on localhost:8787).
+// Vite config for the Agentree Web Console. The live dev mode talks to the
+// Gateway on localhost:8787; built assets use the Gateway's same origin.
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';

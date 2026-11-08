@@ -1,8 +1,13 @@
-#!/usr/bin/env -S node --import tsx
+#!/usr/bin/env node
 // Process entry for the `agentree` CLI: wires real stdout/stderr/env into run().
 import { run } from './cli.js';
 
-process.exitCode = run(process.argv.slice(2), {
+import { startLocal } from './start.js';
+
+if (process.argv.length === 2) {
+  try { console.log(await startLocal()); }
+  catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+} else process.exitCode = run(process.argv.slice(2), {
   out: (text) => process.stdout.write(`${text}\n`),
   err: (text) => process.stderr.write(`${text}\n`),
   env: process.env,

@@ -13,7 +13,7 @@ let baseUrl: string;
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'agentree-main-history-'));
-  gateway = createGateway({ database: join(directory, 'gateway.sqlite'), adminToken });
+  gateway = createGateway({ database: join(directory, 'gateway.sqlite') });
   await new Promise<void>(resolve => gateway.server.listen(0, '127.0.0.1', resolve));
   const address = gateway.server.address();
   assert.ok(address && typeof address !== 'string');
@@ -28,7 +28,7 @@ after(async () => {
 async function request(path: string, token: string, method = 'GET', data?: unknown) {
   return fetch(`${baseUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { ...(token === adminToken ? {} : { authorization: `Bearer ${token}` }), ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 }

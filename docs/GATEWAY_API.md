@@ -1,12 +1,12 @@
 # Gateway API
 
-Run the local daemon with Node.js 24+. Keep the generated admin credential local. Native sessions use their own session bearer credential; the Console pairs using the admin token and receives an HttpOnly cookie. Allowed Console origins and the existing write-origin check remain enforced. HTTP input never selects a Core actor.
+Run the local daemon with Node.js 24+. Local human requests carry no credentials. Native sessions retain individual bearer credentials. See [local security](LOCAL_SECURITY.md). HTTP input never selects a Core actor.
 
 See [Main editing, history and restoration](MAIN_API.md) for the complete Main contract, and [task dispatch](TASK_DISPATCH_API.md) for explicit native task submission. The [quick start](../README.md#quick-start) documents startup and configuration. [fixtures/gateway.http](../fixtures/gateway.http) contains manual HTTP requests.
 
 ## Supervision API
 
-All paths below are under `/v1`. Human writes require an admin bearer or paired Console session. Agents may read only their workspace and submit work only on their own branch. Errors use `{error:{code,message}}`; stale Main writes return HTTP 409 / `STALE`.
+All paths below are under `/v1`. Human requests omit Authorization and browser writes require an allowed Origin. Agents may read only their workspace and submit work only on their own branch. Errors use `{error:{code,message}}`; stale Main writes return HTTP 409 / `STALE`.
 
 | Method and path | Behavior |
 | --- | --- |
@@ -41,14 +41,14 @@ Text-only Main edits retain file references; pass `files:[]` to clear them. Main
 
 - `GET /health` reports daemon health.
 - `GET|POST /workspaces`, `GET /workspaces/:id`, `GET|POST /workspaces/:id/branches` retain workspace and logical branch operations.
-- `POST /sessions` registers `{runtime,cwd?,label?,branchId?,nativeId?}` using a human credential. It returns a session binding and session token. Use `cwd` or an existing branch; Main cannot own a native session.
+- `POST /sessions` registers `{runtime,cwd?,label?,branchId?,nativeId?}` as the local human. It returns a session binding and session token. Use `cwd` or an existing branch; Main cannot own a native session.
 - `GET /sessions` and `GET /sessions/:id` expose lifecycle, process exit reports and runtime capabilities. Session credentials may retrieve their own binding.
 - `POST /sessions/:id/kill` requests stopping; `POST /sessions/:id/end` records end/exit reports. A kill request is distinct from reported process exit.
 - `POST /events` ingests normalized **observed** events. `(workspace,source,nativeId)` deduplicates retries; session/workspace identity is validated.
 - `GET /workspaces/:id/events?after=0&limit=1000` returns a durable sequence page. Core also supports frozen through-sequence windows and session/source/type filters.
 - `GET /stream?workspaceId=:id&after=0` delivers SSE with event IDs and reconnect cursors. Native credentials see their own session events.
 - `POST /decide` is the native pre-execution tool approval boundary; `GET /approvals` and `POST /approvals/:id` serve human review with `{decision:"approved"|"denied",reason?}`. Timeouts and ended sessions deny execution. Approval does not imply native success.
-- `POST /console/login` requires the admin bearer and allowed Origin. `POST /console/logout` clears the paired browser cookie.
+- Console login/logout endpoints have been removed; no cookies are issued.
 
 Human task routes are `POST|GET /tasks`, `GET /tasks/:id`, and `POST /tasks/:id/cancel`; session-bound runner routes are listed in the [task dispatch contract](TASK_DISPATCH_API.md).
 

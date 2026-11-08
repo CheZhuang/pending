@@ -1,5 +1,5 @@
-// Picks the API implementation. Order: ?api=live|mock in the URL, the mode the
-// user picked last time, `vite --mode live`, then mock. Views only import `api`.
+// Picks the API implementation. Order: ?api=live|mock in the URL, saved choice,
+// explicit Vite live mode, then live for built assets and mock for Vite preview.
 import { live } from './live.js';
 import { createMock } from './mock.js';
 
@@ -12,7 +12,9 @@ function initialMode() {
     const saved = localStorage.getItem(KEY);
     if (saved === 'live' || saved === 'mock') return saved;
   } catch { /* storage unavailable */ }
-  return import.meta.env.VITE_API_MODE === 'live' || import.meta.env.MODE === 'live' ? 'live' : 'mock';
+  return import.meta.env.VITE_API_MODE === 'mock' ? 'mock'
+    : import.meta.env.VITE_API_MODE === 'live' || import.meta.env.MODE === 'live' ? 'live'
+      : import.meta.env.PROD ? 'live' : 'mock';
 }
 
 export const mode = initialMode();

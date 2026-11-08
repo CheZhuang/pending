@@ -1,20 +1,18 @@
-// Live client for the local Gateway (docs/GATEWAY_API.md). REST with the
-// HttpOnly console cookie (credentials: 'include') and SSE for live events.
-// The admin token is only sent once, to pair the browser; it is never stored.
+// Live client for the local Gateway (docs/GATEWAY_API.md). Built Console assets
+// use same-origin requests; Vite development can point directly at the Gateway.
 import { ApiError } from './errors.js';
 
 // import.meta.env is Vite-only; the optional chain keeps this module loadable in node tests.
-const BASE = (import.meta.env?.VITE_GATEWAY_URL || 'http://localhost:8787').replace(/\/$/, '');
+const ENV = import.meta.env ?? {};
+const BASE = (ENV.VITE_GATEWAY_URL || (ENV.DEV ? 'http://localhost:8787' : '')).replace(/\/$/, '');
 
-async function request(path, { method = 'GET', body, token } = {}) {
+async function request(path, { method = 'GET', body } = {}) {
   let response;
   try {
     response = await fetch(`${BASE}${path}`, {
       method,
-      credentials: 'include',
       headers: {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -44,9 +42,6 @@ export const live = {
   baseUrl: BASE,
 
   health: () => request('/health'),
-  login: (token) => request('/v1/console/login', { method: 'POST', token }),
-  logout: () => request('/v1/console/logout', { method: 'POST' }),
-
   workspaces: () => request('/v1/workspaces'),
   branches: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/branches`),
   main: (workspaceId) => request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/main`),
@@ -101,13 +96,13 @@ export const live = {
    */
   stream(workspaceId, after, { onEvent, onStatus }) {
     const url = `${BASE}/v1/stream?after=${after}&workspaceId=${encodeURIComponent(workspaceId)}`;
-    const source = new EventSource(url, { withCredentials: true });
+    const source = new EventSource(url);
     onStatus('connecting');
     source.onopen = () => onStatus('live');
     source.onmessage = (message) => {
       try { onEvent(JSON.parse(message.data)); } catch { /* ignore malformed frames */ }
     };
-    // CLOSED means the gateway refused the stream (e.g. not paired); otherwise it is retrying.
+    // CLOSED means the gateway refused the stream; otherwise it is retrying.
     source.onerror = () => onStatus(source.readyState === EventSource.CLOSED ? 'closed' : 'reconnecting');
     return () => source.close();
   },

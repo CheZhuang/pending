@@ -1,11 +1,10 @@
-<!-- App layout: navigation, workspace picker, live connection state, mock/live switch, and pairing. -->
+<!-- App layout: navigation, workspace picker, live connection state, and mock/live switch. -->
 <script setup>
 import { computed, h, onMounted, ref, watch } from 'vue';
 import { RouterLink, RouterView, useRoute } from 'vue-router';
 import {
   NAlert, NBadge, NButton, NDropdown, NLayout, NLayoutContent, NLayoutHeader, NLayoutSider, NMenu, NSelect, NSpin, NTag,
 } from 'naive-ui';
-import PairDialog from './PairDialog.vue';
 import { switchMode } from '../api/index.js';
 import { describe } from '../api/errors.js';
 import { boot, selectWorkspace, state } from '../state.js';
@@ -89,7 +88,7 @@ onMounted(boot);
           <template #action><NButton size="small" @click="boot">Retry</NButton></template>
         </NAlert>
         <div v-if="state.loading && !state.workspaces.length" class="center"><NSpin /></div>
-        <div v-else-if="!state.workspaces.length && !fatal && !state.needsLogin" class="page">
+        <div v-else-if="!state.workspaces.length && !fatal" class="page">
           <h1 class="page-title">No workspace yet</h1>
           <p class="page-sub">Register an agent session with the gateway (for example the managed Claude launcher), or create one with <span class="mono">npm run agentree -- init &lt;name&gt;</span>.</p>
         </div>
@@ -97,7 +96,6 @@ onMounted(boot);
       </NLayoutContent>
     </NLayout>
   </NLayout>
-  <PairDialog />
 </template>
 
 <style scoped>

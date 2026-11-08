@@ -1,7 +1,6 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { createGateway } from '../src/gateway.js';
 import { ManagedCodex } from '../packages/adapters/src/codex-managed.js';
 import { runManagedClaude } from '../packages/adapters/src/claude-launcher.js';
@@ -9,15 +8,15 @@ import { runManagedClaude } from '../packages/adapters/src/claude-launcher.js';
 const runtime=process.argv[2];
 if(runtime!=='codex'&&runtime!=='claude')throw new Error('Usage: npm run smoke:native -- codex|claude');
 const directory=mkdtempSync(join(tmpdir(),'agentree-native-smoke-'));
-const database=join(directory,'gateway.sqlite');const adminToken=randomBytes(32).toString('hex');
+const database=join(directory,'gateway.sqlite');
 writeFileSync(join(directory,'smoke.txt'),'AGENTREE_NATIVE_SMOKE\n');
-const gateway=createGateway({database,adminToken,approvalTimeoutMs:15000});
+const gateway=createGateway({database,approvalTimeoutMs:15000});
 await new Promise<void>(resolve=>gateway.server.listen(0,'127.0.0.1',resolve));
 const address=gateway.server.address();if(!address||typeof address==='string')throw new Error('No Gateway socket');
 const gatewayUrl=`http://127.0.0.1:${address.port}`;
 let native:ManagedCodex|undefined;
 let dispatchEvidence:unknown;
-const headers={authorization:`Bearer ${adminToken}`,'content-type':'application/json'};
+const headers={'content-type':'application/json'};
 // Smoke review grants only literal reads of the one synthetic fixture; all other tool requests are denied.
 const reviews=setInterval(()=>{void (async()=>{
  const response=await fetch(`${gatewayUrl}/v1/approvals`,{headers});
@@ -34,7 +33,7 @@ try {
  const prompt='Use the agentree MCP work_propose tool now. Propose work with body "AGENTREE_NATIVE_SMOKE" and no files. Then say SMOKE_OK. Do not use any other tools or modify files.';
  let sessionId:string|undefined;
  if(runtime==='codex') {
-  native=await ManagedCodex.open({gatewayUrl,databasePath:database,cwd:directory,adminToken,stateDirectory:join(directory,'state'),adapter:{args:['app-server','--listen','stdio://','-c','mcp_servers={}'],threadStartParams:{approvalPolicy:'untrusted',sandbox:'read-only'}}});
+  native=await ManagedCodex.open({gatewayUrl,databasePath:database,cwd:directory,stateDirectory:join(directory,'state'),adapter:{args:['app-server','--listen','stdio://','-c','mcp_servers={}'],threadStartParams:{approvalPolicy:'untrusted',sandbox:'read-only'}}});
   sessionId=native.gateway.session.id;
   console.log(JSON.stringify({phase:'registered',runtime,sessionId,nativeId:native.binding.nativeId}));
   const readyDeadline=Date.now()+10000;let ready=false;
@@ -56,11 +55,8 @@ try {
   if(latest.status!=='completed')throw new Error(`Dispatched task ${latest.status}`);
   dispatchEvidence=latest;
  }else {
-  const previous=process.env.HARNESS_ADMIN_TOKEN;process.env.HARNESS_ADMIN_TOKEN=adminToken;
-  try {
-   const code=await runManagedClaude({cwd:directory,label:'Claude native smoke',databasePath:database,gatewayUrl,command:process.env.CLAUDE_COMMAND??'claude',args:['-p',prompt,'--max-turns','8','--strict-mcp-config']});
-   if(code!==0)throw new Error(`Claude exited ${code}`);
-  }finally {if(previous===undefined)delete process.env.HARNESS_ADMIN_TOKEN;else process.env.HARNESS_ADMIN_TOKEN=previous;}
+  const code=await runManagedClaude({cwd:directory,label:'Claude native smoke',databasePath:database,gatewayUrl,command:process.env.CLAUDE_COMMAND??'claude',args:['-p',prompt,'--max-turns','8','--strict-mcp-config']});
+  if(code!==0)throw new Error(`Claude exited ${code}`);
   const sessions=await (await fetch(`${gatewayUrl}/v1/sessions`,{headers})).json() as Array<{id:string}>;sessionId=sessions[0]?.id;
  }
  if(!sessionId)throw new Error('Native session was not registered');

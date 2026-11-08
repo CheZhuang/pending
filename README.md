@@ -17,22 +17,16 @@ Use **Node.js 24+** and npm. Run these commands from the repository root:
 
 ```sh
 npm ci
-npm run build
-npm start
-```
-
-The Gateway listens at `http://127.0.0.1:8787`. In another terminal, start the Console:
-
-```sh
 npm ci --prefix apps/web
-npm --prefix apps/web run dev:live
+npm run build
+npm run agentree
+# Or npm link once, then: agentree
 ```
 
-Open **http://localhost:5173/?api=live** and pair with the admin token:
-
-```sh
-cat "${GATEWAY_DATA_DIR:-$HOME/.local/share/agentree}/admin-token"
-```
+This starts or connects to the local Gateway and opens `http://127.0.0.1:8787`.
+The built Console is served on that origin. No pairing or credential setup is needed.
+For Vite development, run `npm run dev` and `npm --prefix apps/web run dev:live`,
+then open `http://localhost:5173/?api=live`.
 
 Create a workspace and an initial expectation from the CLI, using an absolute project path:
 
@@ -49,11 +43,11 @@ For a standalone Console preview, use `npm --prefix apps/web run dev` and open `
 
 | Setting | Default / purpose |
 | --- | --- |
-| `GATEWAY_DATA_DIR` | `~/.local/share/agentree`; Gateway database and generated admin token |
+| `GATEWAY_DATA_DIR` | `~/.local/share/agentree`; Gateway database (AGENTREE_HOME takes precedence) |
 | `PORT` | `8787`; Gateway binds to `127.0.0.1` |
-| `HARNESS_ADMIN_TOKEN` | Optional admin credential override (at least 32 characters); otherwise load or generate `admin-token` |
+| `AGENTREE_NO_OPEN` | Set to `1` to print the Console URL without opening a browser |
 | `GATEWAY_CONSOLE_ORIGINS` | Comma-separated origins; defaults to `http://localhost:5173,http://127.0.0.1:5173` |
-| `VITE_GATEWAY_URL` | Console build/dev setting; defaults to `http://localhost:8787` |
+| `VITE_GATEWAY_URL` | Console build/dev setting; same origin in builds, `http://localhost:8787` in Vite |
 
 Keep the data directory and credentials private. Use the same data directory for the Gateway, CLI, and native launchers. The CLI has [additional state overrides](apps/cli/README.md). Native hosts need local access to the Gateway SQLite database for MCP.
 
@@ -77,6 +71,8 @@ See [verification](docs/SUPERVISION_VERIFICATION.md) for coverage and live smoke
 
 - [Documentation index](docs/README.md): guides, references, and documentation ownership.
 - [Native setup](docs/NATIVE_AGENTS.md) and [CLI](apps/cli/README.md): launch and inspect agents.
-- [Console](apps/web/README.md): mock/live modes, pairing, and builds.
+- [Console](apps/web/README.md): mock/live modes and builds.
 - [Gateway API](docs/GATEWAY_API.md), [Main history](docs/MAIN_API.md), and [task dispatch](docs/TASK_DISPATCH_API.md): HTTP contracts.
 - [Architecture](docs/ARCHITECTURE.md) and [migration](docs/MIGRATION.md): domain behavior, module boundaries, and upgrades.
+
+See [local security](docs/LOCAL_SECURITY.md) for trust boundaries and limitations.
