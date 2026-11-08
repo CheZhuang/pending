@@ -8,7 +8,7 @@
     "dev:live": "vite --mode live",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/api/*.test.js src/views/*.test.js"
+    "test": "node --test src/*.test.js src/api/*.test.js src/views/*.test.js"
   },
   "dependencies": {
     "naive-ui": "^2.45.3",
