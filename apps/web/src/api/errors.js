@@ -34,3 +34,9 @@ export function describe(error) {
   }
   return { title: error?.message ?? String(error), hint: '' };
 }
+
+/** One line for toasts: never blank, even when there is no hint for the code. */
+export function errorText(error) {
+  const d = describe(error);
+  return d.hint ? `${d.title} — ${d.hint}` : d.title;
+}

@@ -10,10 +10,11 @@ const copy = value => structuredClone(value);
 const stamp = () => new Date().toISOString();
 
 /**
- * @param {{ speed?: number }} options speed scales the simulated native task timeline
- *   (1 = realistic seconds; tests use a small value).
+ * @param {{ speed?: number, discoveryScenario?: 'default'|'empty'|'unavailable'|'gateway-disconnected', noWorkspace?: boolean }} options
+ *   speed scales the simulated native task timeline (1 = realistic seconds; tests use a small value).
+ *   noWorkspace: a fresh Gateway with no workspace or session, only unmanaged processes.
  */
-export function createMock({ speed = 1, discoveryScenario = 'default' } = {}) {
+export function createMock({ speed = 1, discoveryScenario = 'default', noWorkspace = false } = {}) {
   const workspace = { id: uid(), name: 'shop', roots: [{ id: 'app', path: ROOT }], mainBranchId: 'main' };
   const branches = [
     { id: 'main', workspaceId: workspace.id, name: 'main', revision: 0 },
@@ -25,30 +26,25 @@ export function createMock({ speed = 1, discoveryScenario = 'default' } = {}) {
     { id: 'session-claude', agentId: 'claude', workspaceId: workspace.id, branchId: 'claude-auth', runtime: 'claude-code', nativeId: 'claude-7f3a', label: 'Claude Code', state: 'active', processStatus: 'unknown' },
     { id: 'session-codex', agentId: 'codex', workspaceId: workspace.id, branchId: 'codex-api', runtime: 'codex-app-server', nativeId: 'thread-api', label: 'Codex (managed)', state: 'active', processStatus: 'unknown' },
   ];
-  const discovered = [
-    {
-      id: 'proc-claude-4102', runtime: 'claude-code', status: 'running',
-      process: { pid: 4102, executable: 'claude', startedAt: '2026-11-07T17:05:00.000Z' },
-      cwd: `${ROOT}/src/auth`, workspace: { id: workspace.id, name: workspace.name, association: 'inferred-cwd' },
-      session: null, activity: null,
-      capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false },
-    },
-    {
-      id: 'proc-codex-5201', runtime: 'codex-app-server', status: 'running',
-      process: { pid: 5201, executable: 'codex', startedAt: '2026-11-07T16:55:00.000Z' },
-      cwd: ROOT, workspace: { id: workspace.id, name: workspace.name, association: 'managed-session' },
-      session: { id: 'session-codex', state: 'active', label: 'API implementation' },
-      activity: { summary: 'Completed an item changing src/api/errors.ts', observedAt: stamp(), evidence: 'native-observed' },
-      capabilities: { canInspectActivity: true, canDispatchTasks: true, canStop: true, canReviewApprovals: false },
-    },
-    {
-      id: 'proc-claude-4103', runtime: 'claude-code', status: 'running',
-      process: null, cwd: null, workspace: null, session: null, activity: null,
-      capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false },
-    },
+  // Process inventory in the Gateway's /v1/processes shape (ProcessInventory in
+  // packages/contracts/src/gateway.ts). Discovery is metadata only: capabilities are
+  // always false; a managed session link comes from launcher-reported identity.
+  const metadataOnly = { passiveObservation: false, managedSession: false, contextInjection: false, preExecutionInterception: false };
+  const processes = [
+    { id: '5201:1731000000.120000', pid: 5201, startTime: '1731000000.120000', parentPid: 5100, runtime: 'codex', executable: '/usr/local/bin/codex', argv: ['codex', 'app-server', '--listen', 'stdio://'], cwd: ROOT, evidence: 'executable-name', identityReliable: true, boundTo: 'session-codex' },
+    { id: '4102:1731000300.450000', pid: 4102, startTime: '1731000300.450000', parentPid: 4100, runtime: 'claude-code', executable: '/usr/local/bin/claude', argv: ['claude', '-p'], cwd: ROOT, evidence: 'executable-name', identityReliable: true, boundTo: 'session-claude' },
+    { id: '6120:1731002000.010000', pid: 6120, startTime: '1731002000.010000', parentPid: 1, runtime: 'claude-code', executable: '/usr/local/bin/claude', argv: ['claude'], cwd: '/Users/dev/notes', evidence: 'executable-name', identityReliable: true },
+    { id: '7311:unknown:1', pid: 7311, runtime: 'codex', evidence: 'official-node-entrypoint', identityReliable: false },
   ];
-  let discoveryRefresh = stamp();
-  let discoveryDisconnected = discoveryScenario === 'gateway-disconnected';
+  for (const p of processes) if (p.boundTo) sessions.find(s => s.id === p.boundTo).process = { pid: p.pid, startTime: p.startTime };
+  let scannedAt = stamp();
+  const inventory = () => {
+    if (discoveryScenario === 'gateway-disconnected') throw new ApiError(0, 'NETWORK', 'Cannot reach the gateway at in-browser mock');
+    if (discoveryScenario === 'unavailable') return { status: 'unavailable', scannedAt, processes: [], message: 'Process enumeration unavailable; check local OS permissions.' };
+    // Exited processes disappear at the next scan, like the Gateway's inventory.
+    const visible = discoveryScenario === 'empty' ? [] : processes.filter(p => !p.boundTo || (!noWorkspace && sessions.find(s => s.id === p.boundTo).state !== 'ended'));
+    return { status: 'ok', scannedAt, processes: visible.map(({ boundTo, ...p }) => ({ ...p, capabilities: { ...metadataOnly }, nativeObservation: 'unavailable', ...(boundTo ? { managedSessionId: boundTo } : {}) })) };
+  };
   let seq = 0;
   const events = [];
   const listeners = new Set();
@@ -189,30 +185,12 @@ export function createMock({ speed = 1, discoveryScenario = 'default' } = {}) {
 
   return {
     mode: 'mock', baseUrl: 'in-browser mock',
-    health: async () => ({ status: 'ok' }), login: async () => ({ ok: true }), logout: async () => ({ ok: true }),
-    workspaces: async () => { await wait(); return [copy(workspace)]; },
+    health: async () => ({ status: 'ok' }),
+    workspaces: async () => { await wait(); return noWorkspace ? [] : [copy(workspace)]; },
     branches: async () => { await wait(); return copy(branches.filter(b => b.id !== workspace.mainBranchId)); },
-    sessions: async () => { await wait(); return sessions.map(sessionView); },
-    discoveredAgents: async () => {
-      await wait();
-      if (discoveryDisconnected) throw new ApiError(0, 'NETWORK', 'Cannot reach the local gateway');
-      const agents = discoveryScenario === 'empty' ? [] : discovered;
-      return copy({ refreshedAt: discoveryRefresh, agents });
-    },
-    refreshDiscovery: async () => {
-      await wait();
-      if (discoveryDisconnected) throw new ApiError(0, 'NETWORK', 'Cannot reach the local gateway');
-      const exited = discovered.find(agent => agent.id === 'proc-claude-4102');
-      if (exited) { exited.status = 'exited'; exited.process = { ...exited.process, exitedAt: stamp(), exitCode: 0 }; }
-      discoveryRefresh = stamp();
-      return copy({ refreshedAt: discoveryRefresh, agents: discoveryScenario === 'empty' ? [] : discovered });
-    },
-    startManagedAgent: async (runtime, cwd) => {
-      await wait();
-      const agent = { id: `proc-${uid()}`, runtime, status: 'running', process: null, cwd: cwd ?? null, workspace: null, session: null, activity: null,
-        capabilities: { canInspectActivity: false, canDispatchTasks: false, canStop: false, canReviewApprovals: false } };
-      discovered.unshift(agent); discoveryRefresh = stamp(); return copy(agent);
-    },
+    sessions: async () => { await wait(); return noWorkspace ? [] : sessions.map(sessionView); },
+    processes: async () => { await wait(); return copy(inventory()); },
+    refreshProcesses: async () => { await wait(); scannedAt = stamp(); return copy(inventory()); },
     killSession: id => run(() => {
       const session = sessions.find(s => s.id === id); if (!session) throw new ApiError(404, 'NOT_FOUND', id);
       if (session.state === 'ended') throw new ApiError(409, 'STATE', 'Session already ended');

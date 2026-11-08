@@ -1,136 +1,195 @@
+<!-- Overview: local coding agents. Managed sessions (with the controls Agentree really
+     has for them) and processes the Gateway merely discovered on this computer.
+     Works without a selected workspace; discovery is computer-wide. -->
 <script setup>
-import { computed } from 'vue';
-import { RouterLink } from 'vue-router';
-import { NAlert, NButton, NCard, NEmpty, NSpin, NTag, useDialog, useNotification } from 'naive-ui';
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpin, NTag, NTooltip, useDialog, useNotification } from 'naive-ui';
 import { api } from '../api/index.js';
-import { describe } from '../api/errors.js';
+import { describe, errorText } from '../api/errors.js';
+import { refreshWorkspaces, selectWorkspace, state } from '../state.js';
 import { useData } from '../useData.js';
-import { short } from '../format.js';
+import { dateTime, short } from '../format.js';
+import { EVIDENCE_TEXT, buildAgentRows, processLine, runtimeName } from '../discovery.js';
 
 const notify = useNotification();
 const dialog = useDialog();
-const { data, error, loading, reload } = useData(() => api.discoveredAgents(), () => []);
-const agents = computed(() => data.value?.agents ?? []);
-const operations = computed(() => data.value?.operations ?? {});
+const router = useRouter();
 
-const runtimeName = runtime => ({ 'claude-code': 'Claude Code', claude: 'Claude Code', codex: 'Codex', 'codex-app-server': 'Codex' }[runtime] ?? runtime ?? 'Unknown runtime');
-const connectionLabel = agent => agent.session?.id ? 'Agentree managed' : 'Discovered · unmanaged';
-const dateLabel = value => value ? new Date(value).toLocaleString() : null;
-function processDescription(agent) {
-  if (!agent.process) return 'Process details unavailable';
-  const pieces = [];
-  if (agent.process.pid != null) pieces.push(`PID ${agent.process.pid}`);
-  if (agent.process.executable) pieces.push(agent.process.executable);
-  if (agent.process.startedAt) pieces.push(`started ${dateLabel(agent.process.startedAt)}`);
-  if (agent.process.exitCode != null) pieces.push(`exit ${agent.process.exitCode}`);
-  return pieces.join(' · ') || 'Process details unavailable';
+// Sessions and the inventory fail independently: a broken process scan must not hide managed sessions.
+const { data, error, loading, reload } = useData(async () => {
+  const [inventory, sessions] = await Promise.allSettled([api.processes(), api.sessions()]);
+  if (inventory.status === 'rejected' && sessions.status === 'rejected') throw sessions.reason;
+  return {
+    inventory: inventory.status === 'fulfilled' ? inventory.value : null,
+    inventoryError: inventory.status === 'rejected' ? inventory.reason : null,
+    sessions: sessions.status === 'fulfilled' ? sessions.value : [],
+    sessionsError: sessions.status === 'rejected' ? sessions.reason : null,
+  };
+}, () => [state.changed.sessions], { workspaceScoped: false });
+
+const rows = computed(() => buildAgentRows({ inventory: data.value?.inventory, sessions: data.value?.sessions ?? [], workspaces: state.workspaces }));
+const inventory = computed(() => data.value?.inventory ?? null);
+// A session in a workspace the Console has not listed yet (e.g. created by a demo after the page opened).
+watch(() => rows.value.unknownWorkspaceIds.join(','), (ids) => { if (ids) void refreshWorkspaces(); });
+
+// GET /v1/processes returns the Gateway's cached scan (it rescans every 5 s itself),
+// so polling it is cheap. Poll only while this page is open and visible.
+const POLL_MS = 10_000;
+let timer = null;
+const tick = () => { if (document.visibilityState === 'visible') void reload(); };
+onMounted(() => { timer = setInterval(tick, POLL_MS); });
+onBeforeUnmount(() => clearInterval(timer));
+
+const refreshing = ref(false);
+async function rescan() {
+  refreshing.value = true;
+  try { await api.refreshProcesses(); await reload(); }
+  catch (e) { notify.error({ title: 'Process scan failed', content: errorText(e) }); }
+  finally { refreshing.value = false; }
 }
-function associationLabel(workspace) {
-  if (!workspace?.name) return 'Workspace unavailable';
-  return workspace.association === 'inferred-cwd' ? `${workspace.name} · matched from working directory` : workspace.name;
+
+function stop(row) {
+  dialog.warning({
+    title: `Stop ${row.title}?`,
+    content: 'Agentree asks the launcher to terminate this managed session. Pending approvals are denied and unfinished tasks end without a native outcome. This cannot be undone.',
+    positiveText: 'Stop session', negativeText: 'Cancel',
+    onPositiveClick: async () => {
+      try {
+        const result = await api.killSession(row.session.id);
+        notify.info({ title: 'Stop requested', content: `Session is ${result.state}. The exit appears once the launcher reports it.`, duration: 6000 });
+      } catch (e) { notify.error({ title: 'Stop failed', content: errorText(e) }); }
+      finally { void reload(); }
+    },
+  });
 }
-async function refresh() {
-  try { await api.refreshDiscovery(); await reload(); }
-  catch (e) { notify.error({ title: describe(e).title, content: describe(e).hint }); }
+
+/** Open a workspace page for this session, switching workspace first when needed. */
+async function open(row, path, query) {
+  if (row.workspace?.id && row.workspace.id !== state.workspaceId) await selectWorkspace(row.workspace.id);
+  router.push({ path, query });
 }
-async function start(runtime) {
-  try { await api.startManagedAgent(runtime); await reload(); }
-  catch (e) { notify.error({ title: describe(e).title, content: describe(e).hint }); }
-}
-function stop(agent) {
-  dialog.warning({ title: `Stop ${runtimeName(agent.runtime)}?`, content: 'Request termination of this Agentree-managed session?', positiveText: 'Stop session', negativeText: 'Cancel', onPositiveClick: async () => {
-    try { await api.killSession(agent.session.id); await reload(); }
-    catch (e) { notify.error({ title: describe(e).title, content: describe(e).hint }); }
-  } });
-}
+
+const lifecycle = (s) => ({ active: 'success', 'kill-requested': 'warning' }[s.state] ?? 'default');
+const capabilityList = (row) => [
+  ['Tasks', row.capabilities.tasks],
+  ['Approvals', row.capabilities.approvals],
+  ['Stop', row.capabilities.stop],
+];
+
+const unmanagedColumns = [
+  { title: 'Runtime', key: 'runtime', width: 110, render: (r) => runtimeName(r.runtime) },
+  { title: 'PID', key: 'pid', width: 80, render: (r) => h('span', { class: 'mono' }, r.process.pid) },
+  { title: 'Working directory', key: 'cwd', ellipsis: { tooltip: true }, render: (r) => h('span', { class: r.process.cwd ? 'mono' : 'muted' }, r.process.cwd ?? 'Unavailable on this platform or permission') },
+  { title: 'Executable', key: 'executable', ellipsis: { tooltip: true }, render: (r) => h('span', { class: r.process.executable ? 'mono' : 'muted' }, r.process.executable ?? 'Unavailable') },
+  { title: 'Identified by', key: 'evidence', width: 210, render: (r) => `${EVIDENCE_TEXT[r.process.evidence] ?? r.process.evidence}${r.process.identityReliable ? '' : ' · no start time'}` },
+];
 </script>
 
 <template>
-  <main class="page">
+  <div class="page">
     <div class="heading">
       <div>
         <h1 class="page-title">Local agents</h1>
-        <p class="page-sub">Native processes found on this computer. Discovery alone does not give Agentree control of a session.</p>
+        <p class="page-sub">Claude Code and Codex on this computer. Only managed sessions can be supervised; a discovered process is metadata only.</p>
       </div>
-      <NButton secondary :loading="loading" @click="refresh">Refresh discovery</NButton>
+      <NButton secondary size="small" :loading="refreshing" @click="rescan">Scan processes now</NButton>
     </div>
 
     <NAlert v-if="error" type="error" :title="describe(error).title" class="notice">
       {{ describe(error).hint }}
       <template #action><NButton size="small" @click="reload">Retry</NButton></template>
     </NAlert>
-    <div v-else-if="loading && !data" class="center"><NSpin size="large" /></div>
+    <div v-else-if="!data" class="center"><NSpin size="large" /></div>
     <template v-else>
-      <div class="refresh-line muted">Last discovery refresh: {{ dateLabel(data?.refreshedAt) ?? 'not reported' }}</div>
-      <NEmpty v-if="!agents.length" description="No Claude Code or Codex agents detected" class="empty" />
-      <section v-else class="agent-list">
-        <NCard v-for="agent in agents" :key="agent.id" size="small" class="agent-card">
+      <div class="scan-line muted">
+        <template v-if="data.inventoryError">Process discovery: {{ describe(data.inventoryError).title }}</template>
+        <template v-else-if="inventory?.status === 'initializing'">Process discovery: first scan in progress…</template>
+        <template v-else>Process scan: {{ inventory?.scannedAt ? dateTime(inventory.scannedAt) : 'not reported' }} · refreshes every few seconds</template>
+        <NSpin v-if="loading" size="small" style="margin-left: 8px" />
+      </div>
+      <NAlert v-if="inventory?.status === 'unavailable'" type="warning" class="notice" title="Process discovery unavailable">{{ inventory.message ?? 'The Gateway could not enumerate local processes.' }} Managed sessions are still listed.</NAlert>
+      <NAlert v-if="data.sessionsError" type="error" class="notice" :title="describe(data.sessionsError).title">Managed sessions could not be loaded. {{ describe(data.sessionsError).hint }}</NAlert>
+
+      <h2 class="section">Managed sessions <span class="muted count">{{ rows.managed.length }}</span></h2>
+      <NEmpty v-if="!rows.managed.length" class="empty" description="No managed session is running. Start Claude Code or Codex through an Agentree launcher to supervise it." />
+      <div class="agent-list">
+        <NCard v-for="row in rows.managed" :key="row.key" size="small">
           <div class="agent-head">
             <div>
-              <div class="agent-title">{{ runtimeName(agent.runtime) }} <span class="muted mono">{{ short(agent.id) }}</span></div>
-              <div class="meta">{{ processDescription(agent) }}</div>
+              <div class="agent-title">{{ row.title }} <span class="muted mono">{{ row.session.runtime }} · {{ short(row.session.id) }}</span></div>
+              <div class="meta">{{ processLine(row.process) }}</div>
+              <div v-if="!row.process && row.reportedProcess" class="meta">Launcher reported PID {{ row.reportedProcess.pid }}</div>
             </div>
             <div class="tags">
-              <NTag size="small" :type="agent.session?.id ? 'success' : 'warning'" :bordered="false">{{ connectionLabel(agent) }}</NTag>
-              <NTag size="small" :type="agent.status === 'running' ? 'success' : 'default'" :bordered="false">{{ agent.status ?? 'status unavailable' }}</NTag>
+              <NTag size="small" type="info" :bordered="false">Agentree managed</NTag>
+              <NTag size="small" :type="lifecycle(row.session)" :bordered="false">{{ row.session.state }}</NTag>
             </div>
           </div>
-
           <div class="details">
-            <div><span class="label">Working directory</span><span class="mono path">{{ agent.cwd ?? 'Unavailable' }}</span></div>
-            <div><span class="label">Workspace</span><span>{{ associationLabel(agent.workspace) }}</span></div>
-            <div><span class="label">Recent activity</span><span>{{ agent.activity?.summary ?? 'No activity observed' }}<small v-if="agent.activity?.evidence" class="evidence">{{ agent.activity.evidence }}<template v-if="agent.activity.observedAt"> · {{ dateLabel(agent.activity.observedAt) }}</template></small></span></div>
+            <div><span class="label">Workspace</span><span>{{ row.workspace.name ?? 'Not listed yet' }}<span v-if="row.workspace.id === state.workspaceId" class="muted"> · selected</span></span></div>
+            <div><span class="label">Working directory</span><span :class="row.process?.cwd ? 'mono path' : 'muted'">{{ row.process?.cwd ?? 'Not reported' }}</span></div>
+            <div><span class="label">Process exit</span><span>{{ row.session.processStatus === 'exit-reported' ? 'Exit reported by launcher' : 'No exit reported' }}</span></div>
           </div>
-
           <div class="capabilities">
-            <span class="label">Available through Agentree</span>
-            <NTag v-if="agent.capabilities?.canInspectActivity" size="small" type="info">Inspect activity</NTag>
-            <NTag v-if="agent.capabilities?.canDispatchTasks" size="small" type="info">Dispatch tasks</NTag>
-            <NTag v-if="agent.capabilities?.canReviewApprovals" size="small" type="info">Review approvals</NTag>
-            <NTag v-if="agent.capabilities?.canStop" size="small" type="info">Stop session</NTag>
-            <span v-if="!agent.capabilities || !Object.values(agent.capabilities).some(Boolean)" class="muted">No session controls available</span>
+            <span class="label">Through Agentree</span>
+            <NTooltip v-for="[name, cap] in capabilityList(row)" :key="name">
+              <template #trigger><NTag size="small" :type="cap.available ? 'success' : 'default'" :bordered="false">{{ cap.available ? '✓' : '✕' }} {{ name }}</NTag></template>
+              {{ cap.note }}
+            </NTooltip>
           </div>
-
-          <div v-if="agent.session?.id" class="actions">
-            <RouterLink to="/main"><NButton size="tiny" secondary>Main</NButton></RouterLink>
-            <RouterLink v-if="agent.capabilities?.canDispatchTasks" to="/tasks"><NButton size="tiny" secondary>Tasks</NButton></RouterLink>
-            <RouterLink to="/conflicts"><NButton size="tiny" secondary>Conflicts</NButton></RouterLink>
-            <RouterLink v-if="agent.capabilities?.canReviewApprovals" to="/approvals"><NButton size="tiny" secondary>Approvals</NButton></RouterLink>
-            <RouterLink v-if="agent.capabilities?.canInspectActivity" to="/activity"><NButton size="tiny" secondary>Activity</NButton></RouterLink>
-            <NButton v-if="agent.capabilities?.canStop" size="tiny" type="error" secondary @click="stop(agent)">Stop session</NButton>
+          <div class="actions">
+            <NButton size="tiny" secondary @click="open(row, '/activity', { session: row.session.id })">Activity</NButton>
+            <NButton v-if="row.capabilities.tasks.available" size="tiny" secondary @click="open(row, '/tasks', { session: row.session.id })">Dispatch task</NButton>
+            <NButton v-if="row.capabilities.approvals.available" size="tiny" secondary @click="open(row, '/approvals')">Approvals</NButton>
+            <NButton size="tiny" secondary @click="open(row, '/branches')">Branch work</NButton>
+            <span class="spacer" />
+            <NButton v-if="row.capabilities.stop.available" size="tiny" type="error" secondary @click="stop(row)">Stop session</NButton>
           </div>
         </NCard>
-      </section>
-      <div v-if="operations.canStartManagedAgent" class="start-row">
-        <span class="muted">Start a new managed session</span>
-        <NButton size="small" @click="start('codex-app-server')">Start managed Codex</NButton>
-        <NButton size="small" @click="start('claude-code')">Start managed Claude Code</NButton>
       </div>
+
+      <h2 class="section">Discovered, not managed <span class="muted count">{{ rows.unmanaged.length }}</span></h2>
+      <p class="muted note">Found in the OS process list by name or path. Agentree cannot dispatch tasks to, review approvals for, or stop these processes, and does not observe their activity.</p>
+      <NCard size="small">
+        <NDataTable :columns="unmanagedColumns" :data="rows.unmanaged" :row-key="(r) => r.key" size="small" :bordered="false" :scroll-x="820">
+          <template #empty><NEmpty size="small" :description="inventory?.status === 'ok' ? 'No other Claude Code or Codex processes found.' : 'No process inventory available.'" /></template>
+        </NDataTable>
+      </NCard>
+
+      <details v-if="rows.ended.length" class="ended">
+        <summary class="muted">{{ rows.ended.length }} ended session{{ rows.ended.length === 1 ? '' : 's' }}</summary>
+        <div v-for="s in rows.ended" :key="s.id" class="ended-line"><span>{{ s.label || runtimeName(s.runtime) }}</span><span class="mono muted">{{ s.runtime }} · {{ short(s.id) }}</span><span class="muted">{{ s.processStatus === 'exit-reported' ? 'exit reported' : 'exit not reported' }}</span></div>
+      </details>
     </template>
-  </main>
+  </div>
 </template>
 
 <style scoped>
-.heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-.heading .page-title { margin-bottom:4px; }
-.notice { margin:12px 0; }
-.refresh-line { font-size:12px; margin:8px 0 14px; }
-.agent-list { display:grid; gap:10px; }
-.agent-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; }
-.agent-title { font-size:15px; font-weight:650; }
-.meta { margin-top:4px; font-size:12px; color:#a5adce; }
-.tags { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-.details { display:grid; grid-template-columns:minmax(180px, 1fr) minmax(180px, .8fr) minmax(220px, 1.3fr); gap:14px; margin-top:14px; font-size:12px; }
-.details > div { min-width:0; display:flex; flex-direction:column; gap:4px; }
-.label { color:#a5adce; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
-.path { overflow-wrap:anywhere; }
-.evidence { display:block; color:#a5adce; margin-top:3px; }
-.capabilities { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:13px; }
-.capabilities .label { margin-right:4px; }
-.actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; padding-top:10px; border-top:1px solid #414559; }
-.actions a { text-decoration:none; }
-.start-row { display:flex; align-items:center; gap:8px; margin-top:18px; flex-wrap:wrap; }
-.empty { padding:56px 0; }
-.center { display:flex; justify-content:center; padding:60px; }
-@media(max-width:760px) { .agent-head { flex-direction:column; } .tags { justify-content:flex-start; } .details { grid-template-columns:1fr; } }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.heading .page-title { margin-bottom: 4px; }
+.notice { margin: 10px 0; }
+.scan-line { display: flex; align-items: center; font-size: 12px; margin: 0 0 6px; }
+.section { font-size: 15px; margin: 18px 0 10px; }
+.count { font-weight: 400; font-size: 13px; margin-left: 4px; }
+.note { font-size: 12px; margin: -4px 0 10px; }
+.agent-list { display: grid; gap: 10px; }
+.agent-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+.agent-title { font-size: 15px; font-weight: 650; }
+.meta { margin-top: 4px; font-size: 12px; color: #a5adce; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; font-size: 12px; }
+.details > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.label { color: #a5adce; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.path { overflow-wrap: anywhere; }
+.capabilities { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.capabilities .label { margin-right: 4px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid #414559; }
+.spacer { flex: 1; }
+.empty { padding: 24px 0; }
+.center { display: flex; justify-content: center; padding: 60px; }
+.ended { margin-top: 18px; font-size: 13px; }
+.ended summary { cursor: pointer; }
+.ended-line { display: flex; gap: 12px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid #414559; }
+@media (max-width: 760px) { .heading, .agent-head { flex-direction: column; } .tags { justify-content: flex-start; } .details { grid-template-columns: 1fr; } }
 </style>
