@@ -54,8 +54,14 @@ export interface MainEntry {
     id: string; workspaceId: string; body: string; files: FileRef[];
     revision: number; removed: boolean; actor: Actor; createdAt: string;
     sourceWorkId?: string; legacyCommitId?: string;
+    /** Historical global selection and the copied entry version, if it existed there. */
+    restoredFrom?: { revision: number; entryRevision?: number };
 }
 export interface MainSnapshot { workspaceId: string; revision: number; entries: MainEntry[]; removedEntries: MainEntry[]; }
+export interface MainRevision {
+    revision: number; actor: Actor; createdAt: string; entryIds: string[];
+    restoredFromRevision?: number;
+}
 export interface Conflict {
     id: string; workspaceId: string; branchIds: string[]; mainEntryId?: string;
     files: FileRef[]; evidenceIds: string[]; explanation: string;
@@ -102,7 +108,7 @@ export interface NormalizedEvent {
     occurredAt: string;
 }
 export class DomainError extends Error {
-    constructor(public code: string, message: string) { super(message); }
+    constructor(public code: string, message: string, public details?: Record<string, unknown>) { super(message); }
 }
 
 export interface EventQuery {

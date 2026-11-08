@@ -2,6 +2,8 @@
 
 Run the local daemon with Node.js 24+. Keep the generated admin credential local. Native sessions use their own session bearer credential; the Console pairs using the admin token and receives an HttpOnly cookie. Allowed Console origins and the existing write-origin check remain enforced. HTTP input never selects a Core actor.
 
+See [Main editing, history and rollback](MAIN_API.md) for the complete Main contract and examples.
+
 ## Supervision API
 
 All paths below are under `/v1`. Human writes require an admin bearer or paired Console session. Agents may read only their workspace and submit work only on their own branch. Errors use `{error:{code,message}}`; stale Main writes return HTTP 409 / `STALE`.
