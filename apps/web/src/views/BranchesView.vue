@@ -12,6 +12,8 @@ const { data, error, reload } = useData(() => api.supervision(state.workspaceId)
 const selected = ref(null); const correction = ref(''); const busy = ref(false);
 const branches = computed(() => data.value?.branches ?? []);
 const current = computed(() => branches.value.find(x => x.branch.id === selected.value) ?? branches.value[0] ?? null);
+const correctionStateLabel = (state) => ({ 'not-retrieved': 'Not retrieved', retrieved: 'Retrieved · awaiting acknowledgment', acknowledged: 'Acknowledged' }[state] ?? state);
+const correctionStateType = (state) => state === 'acknowledged' ? 'success' : state === 'retrieved' ? 'warning' : 'default';
 async function disposition(work, decision) {
   if (!current.value) return;
   busy.value = true;
@@ -51,8 +53,14 @@ async function sendCorrection() {
         <NSpace v-if="work.state === 'proposed'"><NButton type="primary" size="small" :disabled="busy" @click="disposition(work, 'accepted')">Accept into Main</NButton><NButton type="error" secondary size="small" :disabled="busy" @click="disposition(work, 'rejected')">Reject</NButton></NSpace>
       </NCard>
       <NCard title="Corrections to this branch" size="small" style="margin-top:16px">
-        <p class="muted" style="font-size:12px">Corrections are durable guidance sent to the branch. Delivery does not prove an agent followed them.</p>
-        <div v-for="item in current.corrections" :key="item.id" class="correction">{{ item.body }} <span class="muted">· {{ dateTime(item.createdAt) }}</span></div>
+        <p class="muted" style="font-size:12px">Corrections are durable guidance. Managed runners try to surface new items through the runtime; acknowledgment means the agent confirmed retrieval, not that it complied.</p>
+        <div v-for="item in current.corrections" :key="item.id" class="correction">
+          <div>{{ item.body }} <span class="muted">· {{ dateTime(item.createdAt) }}</span></div>
+          <NSpace size="small" style="margin-top:6px">
+            <NTag v-for="delivery in item.deliveries ?? []" :key="delivery.sessionId" size="tiny" :type="correctionStateType(delivery.state)" :bordered="false">{{ delivery.runtime }} · {{ short(delivery.sessionId) }} · {{ correctionStateLabel(delivery.state) }}</NTag>
+          </NSpace>
+          <span v-if="!item.deliveries?.length" class="muted" style="font-size:11px">No active session · Not retrieved</span>
+        </div>
         <NInput v-model:value="correction" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="What should the agent correct or reconsider?" />
         <NSpace justify="end" style="margin-top:8px"><NButton type="primary" :disabled="!correction.trim() || busy" @click="sendCorrection">Send correction</NButton></NSpace>
       </NCard>

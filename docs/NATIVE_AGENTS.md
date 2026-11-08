@@ -17,7 +17,24 @@ The launcher creates a fresh session with temporary pre/post-tool hooks and a se
 
 ## Codex App Server
 
-`ManagedCodex.open` owns the App Server connection and registers its native thread ID. Run this example from the repository root after building; change `cwd` to the absolute project directory:
+Install and authenticate `codex` on the machine that runs Agentree. Start Gateway using the [quick start](../README.md#quick-start), then start a managed Codex session from the Agentree repository:
+
+```sh
+npm run codex:managed -- --cwd /absolute/path/to/your/project --label "Codex"
+```
+
+The runner reads the admin token and SQLite database from `GATEWAY_DATA_DIR`, defaulting to `~/.local/share/agentree/`. Keep this process running while you use the session; `Ctrl+C` ends it. The printed session ID is the target for task submission. Submit and inspect tasks from another terminal:
+
+```sh
+npm run task -- submit --session <session-id> --instructions "Review the login flow and report one concrete issue."
+npm run task -- list --session <session-id>
+npm run task -- status <task-id>
+npm run task -- cancel <task-id>
+```
+
+If Gateway uses a nondefault URL, set `AGENTREE_GATEWAY_URL` for both runner and task commands. Set `GATEWAY_DATA_DIR` to the same path for Gateway and both commands. `npm run codex:managed -- --help` and `npm run task -- --help` show command options.
+
+For lower-level integration, `ManagedCodex.open` owns the App Server connection and registers its native thread ID. Run this example from the repository root after building; change `cwd` to the absolute project directory:
 
 ```sh
 export HARNESS_ADMIN_TOKEN="$(cat "${GATEWAY_DATA_DIR:-$HOME/.local/share/agentree}/admin-token")"
@@ -45,10 +62,10 @@ An active managed Codex host also polls the [task dispatch API](TASK_DISPATCH_AP
 
 | Runtime / operation | Observed by Agentree | Gateway decision before execution |
 | --- | --- | --- |
-| Managed Claude PreToolUse | Yes, stable tool-use identity | Yes, hook denies on Gateway failure |
+| Managed Claude PreToolUse | Yes, stable tool-use identity; new corrections are injected as supported hook context | Yes, hook denies on Gateway failure |
 | Managed Claude PostToolUse / failure | Yes, stable tool-use identity | Already executed; observational only |
 | Managed Claude Agentree MCP tools | Yes, through Core records | Session credential and Core authorization |
-| Managed Codex App Server notifications | Yes, durable journal and Gateway deduplication | Observational only |
+| Managed Codex App Server notifications | Yes, durable journal and Gateway deduplication; new corrections use `turn/steer` during an active turn | Supported approval callbacks only; ordinary notifications are observational |
 | Codex command execution and file change approval callbacks | Yes, when App Server emits callback | Yes, callback maps allow/deny to one request |
 | Codex Agentree MCP approval elicitation | Yes, when App Server emits callback | Yes, request is sent to Gateway; each MCP operation also authenticates |
 | Other Codex tools and unsupported callbacks | Only if App Server reports them | No general interception guarantee |
@@ -67,6 +84,6 @@ Run `npm run smoke:native -- claude` or `npm run smoke:native -- codex` for an i
 | Launcher reports missing build | Run `npm run build` at the repository root |
 | Hook immediately denies | Check Gateway reachability and session credential; transport failure denies by default |
 | Agent tools run without Agentree approval | Check that the managed launcher is used and that this tool has a supported interception path |
-| Main/correction does not affect agent behavior | The agent must retrieve context through MCP; delivery is not behavioral compliance |
+| Correction remains not retrieved | Check that the managed runner is connected and the runtime has reached a supported notification point; delivery is not behavioral compliance |
 
 The [MCP tool reference](../packages/mcp/README.md) lists reads and proposals. Main editing, work acceptance, and correction creation are human operations described in the [Gateway API](GATEWAY_API.md).

@@ -12,7 +12,9 @@
     "agentree": "node --import tsx apps/cli/src/main.ts",
     "demo": "node --import tsx demo/two-agents.ts",
     "smoke:native": "node --import tsx demo/native-smoke.ts",
-    "demo:real": "node --import tsx demo/real-two-agents.ts"
+    "demo:real": "node --import tsx demo/real-two-agents.ts",
+    "codex:managed": "node --import tsx apps/cli/src/codex-runner.ts",
+    "task": "node --import tsx apps/cli/src/task.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

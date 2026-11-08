@@ -31,6 +31,29 @@ export interface ClaudeDecideRequest {
 export type ClaudeHookEnvironment = Record<string, string | undefined>;
 export type ClaudeDecide = (request: ClaudeDecideRequest) => Promise<z.infer<typeof decideResponseSchema>>;
 
+async function pendingCorrectionContext(sessionId: string, env: ClaudeHookEnvironment, diagnostic: (line: string) => void): Promise<{ text: string; itemIds: string[] } | undefined> {
+  const token = env.HARNESS_SESSION_TOKEN;
+  if (!token) return undefined;
+  const gatewayUrl = env.HARNESS_GATEWAY_URL ?? 'http://localhost:8787';
+  try {
+    const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/corrections/pending`, gatewayUrl), {
+      headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Gateway returned HTTP ${response.status}`);
+    const corrections = await response.json() as Array<{ itemId: string; value: { body: string } }>;
+    const batch = corrections.slice(0, 10);
+    if (!batch.length) return undefined;
+    const itemIds = batch.map(item => item.itemId);
+    return { itemIds, text: [
+      'New human correction(s) for this Agentree branch arrived during your work. Treat them as current human direction, reconsider affected work, and acknowledge each item through Agentree context_acknowledge after reading it.',
+      ...batch.map(item => `[${item.itemId}] ${item.value.body}`),
+    ].join('\n\n') };
+  } catch (error) {
+    diagnostic(`[Agentree] Could not check or inject branch corrections: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
 export function createClaudeDecideClient(
   gatewayUrl: string,
   timeoutMs = 100_000,
@@ -81,7 +104,27 @@ export async function handleClaudePreToolHook(
       cwd: nativeInput.cwd,
     });
     const decision = result.outcome ?? result.decision;
-    if (decision === 'allow') return 0;
+    if (decision === 'allow') {
+      const correction = await pendingCorrectionContext(env.HARNESS_SESSION_ID!, env, diagnostic);
+      if (correction) {
+        // Make the native hook output available before recording its receipt,
+        // so a lost HTTP response cannot suppress the correction itself.
+        output(JSON.stringify({ hookSpecificOutput: {
+          hookEventName: 'PreToolUse', permissionDecision: 'allow', additionalContext: correction.text,
+        } }));
+        try {
+          const gatewayUrl = env.HARNESS_GATEWAY_URL ?? 'http://localhost:8787';
+          const response = await fetch(new URL(`/v1/sessions/${encodeURIComponent(env.HARNESS_SESSION_ID!)}/corrections/delivered`, gatewayUrl), {
+            method: 'POST', headers: { authorization: `Bearer ${env.HARNESS_SESSION_TOKEN}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ itemIds: correction.itemIds }), signal: AbortSignal.timeout(5000),
+          });
+          if (!response.ok) diagnostic(`[Agentree] Correction context was injected but its Gateway receipt returned HTTP ${response.status}.`);
+        } catch (error) {
+          diagnostic(`[Agentree] Correction context was injected but its Gateway receipt failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return 0;
+    }
     return deny(output, result.by ?? 'Gateway', result.reason ?? 'policy denied this operation');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown Gateway error';

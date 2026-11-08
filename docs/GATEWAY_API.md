@@ -28,12 +28,14 @@ All paths below are under `/v1`. Human writes require an admin bearer or paired 
 | POST `/workspaces/:id/conflicts` | Human report `{branchIds,mainEntryId?,explanation}` |
 | POST `/workspaces/:id/conflicts/:id` | Human `{status,explanation}`; status potential/confirmed/resolved/dismissed |
 | POST `/branches/:id/corrections` | Human sends `{body}`; durable branch-addressed correction |
+| GET `/sessions/:id/corrections/pending` | Session credential; managed runtime retrieves corrections not yet delivered to that session |
+| POST `/sessions/:id/corrections/delivered` | Session credential; `{itemIds}` records runtime acceptance for correction delivery |
 
 Text-only Main edits retain file references; pass `files:[]` to clear them. Main snapshots include `removedEntries` for retained removal history.
 
 `files` contains `{rootId,path}` with canonical workspace-relative paths. Main text may contain project context, expectations or accepted outcomes; no knowledge kind, key, scope or impact scope is required. Explicit `conflictsWithMain` values must identify current Main entries. File overlap is potential evidence. Agentree does not infer semantic incompatibility from matching words.
 
-**Merge accepts work records into Main. It does not merge Git commits, modify files or execute code.** It does not automatically replace another Main entry. Humans edit the reference explicitly to reconcile conclusions. Main revision checks cover the entire accepted selection. Corrections are retrieved through native MCP; sending is not a promise of delivery or behavioral compliance.
+**Merge accepts work records into Main. It does not merge Git commits, modify files or execute code.** It does not automatically replace another Main entry. Humans edit the reference explicitly to reconcile conclusions. Main revision checks cover the entire accepted selection. Supervision read models include per-session correction delivery state. Human `GET /workspaces/:id/conflicts?evidence=1` adds bounded current checkout evidence (Git status/diff/history and current file metadata) for referenced paths; this evidence describes the shared workspace checkout and is not branch attribution or semantic conflict resolution.
 
 ## Preserved native and monitoring endpoints
 

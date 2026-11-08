@@ -5,8 +5,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { SqliteStore } from '../packages/storage/src/index.js';
 import { AgentreeService } from '../packages/core/src/index.js';
-import { DomainError, workInputSchema, type Session, type Workspace } from '../packages/contracts/src/index.js';
+import { DomainError, workInputSchema, type Correction, type Session, type Workspace } from '../packages/contracts/src/index.js';
 import { TaskDispatch } from './task-dispatch.js';
+import { ContextSync } from '../packages/sync/src/engine.js';
+import { EntityLedger } from '../packages/sync/src/ledger.js';
+import { collectConflictEvidence } from './conflict-evidence.js';
 export interface GatewayOptions {
     database: string;
     adminToken: string;
@@ -50,6 +53,25 @@ export function createGateway(options: GatewayOptions) {
     const audit = (type: string, payload: unknown, workspaceId: string, sessionId?: string) => {
         const id = randomUUID();
         store.appendEvent({ id, workspaceId, source: 'gateway', nativeId: id, sessionId, type, mode: 'controlled', payload, occurredAt: new Date().toISOString() });
+    };
+    const deliverySync = new ContextSync(admin, new EntityLedger(store, (sessionId, changes) => {
+        const bound = store.get<Session>(sessionId, 'session');
+        if (bound) audit('correction.delivery-state', { changes }, bound.workspaceId, sessionId);
+    }));
+    const withConflictEvidence = (workspaceId: string, conflicts: ReturnType<AgentreeService['conflicts']>, includeEvidence: boolean) => {
+        if (!includeEvidence) return conflicts;
+        const workspace = store.get<Workspace>(workspaceId, 'workspace');
+        if (!workspace) return conflicts;
+        const inspected = new Map<string, ReturnType<typeof collectConflictEvidence>[number]>();
+        return conflicts.map(conflict => ({ ...conflict, fileEvidence: conflict.files.slice(0, 12).flatMap(file => {
+            const key = `${file.rootId}:${file.path}`;
+            let evidence = inspected.get(key);
+            if (!evidence && inspected.size < 12) {
+                evidence = collectConflictEvidence(workspace, { ...conflict, files: [file] })[0];
+                if (evidence) inspected.set(key, evidence);
+            }
+            return evidence ? [evidence] : [];
+        }) }));
     };
     const tasks = new TaskDispatch(store,(type,task)=>audit(type,{taskId:task.id,requestId:task.requestId,status:task.status,nativeTurnId:task.nativeTurnId,reason:task.reason},task.workspaceId,task.sessionId));
     const approvals = () => (store.db.prepare('SELECT data FROM gateway_approvals ORDER BY rowid').all() as {
@@ -198,6 +220,19 @@ export function createGateway(options: GatewayOptions) {
             if (path === '/v1/sessions' && method === 'GET') {
                 human();
                 return send(store.list<Session>('session').map(s => ({ ...s, ...lifecycle(s.id) })));
+            }
+            const correctionNotificationRoute = path.match(/^\/v1\/sessions\/([^/]+)\/corrections\/(pending|delivered)$/);
+            if (correctionNotificationRoute) {
+                const s = own(correctionNotificationRoute[1]!);
+                if (!sid || sid !== s.id) throw new DomainError('DENY', 'Session credential required');
+                if (method === 'GET' && correctionNotificationRoute[2] === 'pending')
+                    return send(deliverySync.pendingCorrections(s));
+                if (method === 'POST' && correctionNotificationRoute[2] === 'delivered') {
+                    const b = z.object({ itemIds: z.array(text).max(100) }).parse(await body(req));
+                    const allowed = new Set(deliverySync.correctionItemIds(s));
+                    if (b.itemIds.some(itemId => !allowed.has(itemId))) throw new DomainError('DENY', 'Correction item is not addressed to this session branch');
+                    return send({ delivered: deliverySync.markCorrectionsDelivered(s.id, b.itemIds) });
+                }
             }
             const sessionRoute = path.match(/^\/v1\/sessions\/([^/]+)(?:\/(end|kill))?$/);
             if (sessionRoute) {
@@ -434,7 +469,24 @@ export function createGateway(options: GatewayOptions) {
             const supervisionRoute = path.match(/^\/v1\/workspaces\/([^/]+)\/(supervision|conflicts|merges)(?:\/([^/]+))?$/);
             if (supervisionRoute) {
                 const [,wid,kind,conflictId] = supervisionRoute;
-                if (method === 'GET' && !conflictId) return send(kind === 'supervision' ? svc.supervision(wid!) : kind === 'conflicts' ? svc.conflicts(wid!) : svc.merges(wid!));
+                if (method === 'GET' && !conflictId) {
+                    if (kind === 'supervision') {
+                        const view = svc.supervision(wid!);
+                        for (const branch of view.branches) branch.corrections = branch.corrections.map((correction: Correction) => ({
+                            ...correction,
+                            deliveries: branch.sessions.map((bound) => {
+                                const record = deliverySync.status(bound.id).items[`correction:${correction.id}`];
+                                return { sessionId: bound.id, runtime: bound.runtime,
+                                    state: record?.state === 'acknowledged' ? 'acknowledged' : record?.state === 'delivered' ? 'retrieved' : 'not-retrieved',
+                                    ...(record?.deliveredAt ? { retrievedAt: record.deliveredAt } : {}),
+                                    ...(record?.acknowledgedAt ? { acknowledgedAt: record.acknowledgedAt } : {}) };
+                            }),
+                        }));
+                        return send(view);
+                    }
+                    if (kind === 'conflicts') return send(withConflictEvidence(wid!, svc.conflicts(wid!), isAdmin && url.searchParams.get('evidence') === '1'));
+                    return send(svc.merges(wid!));
+                }
                 if (method === 'POST' && kind === 'conflicts') {
                     human();
                     if (conflictId) {

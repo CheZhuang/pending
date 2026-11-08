@@ -52,6 +52,16 @@ async function report() {
       </div>
       <div v-if="conflict.mainEntryId" class="evidence"><strong>Main expectation:</strong> {{ supervision?.main.entries.find(e => e.id === conflict.mainEntryId)?.body ?? conflict.mainEntryId }}</div>
       <div class="files">Files: <NTag v-for="file in conflict.files" :key="file.rootId + file.path" size="small" class="mono">{{ file.rootId }}:{{ file.path }}</NTag><span v-if="!conflict.files?.length" class="muted">none attached</span></div>
+      <NCard v-for="evidence in conflict.fileEvidence ?? []" :key="evidence.file.rootId + evidence.file.path" size="small" class="checkout-evidence">
+        <template #header>Current checkout · <span class="mono">{{ evidence.file.rootId }}:{{ evidence.file.path }}</span></template>
+        <p class="muted evidence-meta">Git status: <code>{{ evidence.gitStatus }}</code> · {{ evidence.currentState.exists ? `${evidence.currentState.bytes ?? '?'} bytes` : 'file missing' }}<template v-if="evidence.currentState.sha256"> · SHA-256 {{ evidence.currentState.sha256.slice(0, 16) }}</template><template v-if="evidence.currentState.modifiedAt"> · modified {{ dateTime(evidence.currentState.modifiedAt) }}</template></p>
+        <p v-if="evidence.gitError" class="muted">Git history unavailable: {{ evidence.gitError }}</p>
+        <p v-if="evidence.currentState.unavailableReason" class="muted">{{ evidence.currentState.unavailableReason }}</p>
+        <div v-if="evidence.recentChanges?.length" class="recent-changes"><strong>Recent commits:</strong><div v-for="commit in evidence.recentChanges" :key="commit.commit"><code>{{ commit.commit.slice(0, 8) }}</code> · {{ dateTime(commit.date) }} · {{ commit.subject }}</div></div>
+        <details v-if="evidence.workingTreeDiff"><summary>Current working tree diff</summary><pre class="git-diff">{{ evidence.workingTreeDiff }}</pre></details>
+        <p v-else-if="!evidence.gitError" class="muted">No uncommitted diff for this file.</p>
+      </NCard>
+      <p v-if="conflict.fileEvidence?.length" class="muted" style="font-size:11px">This evidence describes the current shared checkout; it is not attributed to a logical Agentree branch or agent.</p>
       <p class="muted" style="font-size:12px">{{ conflict.branchIds?.length ?? 0 }} affected branch(es) · {{ conflict.evidenceIds?.length ?? 0 }} evidence item(s) <template v-if="conflict.updatedAt">· {{ dateTime(conflict.updatedAt) }}</template></p>
       <template v-if="['potential','confirmed'].includes(conflict.status)">
         <NInput v-model:value="explanations[conflict.id]" size="small" placeholder="Your assessment is required for this decision" style="margin-bottom:8px" />
@@ -65,4 +75,4 @@ async function report() {
   </div>
 </template>
 
-<style scoped>.explanation { white-space: pre-wrap; line-height: 1.5; }.related,.evidence { font-size:12px; margin:6px 0; }.evidence { padding-left:10px; border-left:2px solid #737994; white-space:pre-wrap; }.files { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin:8px 0; }.actions { display:flex; gap:8px; flex-wrap:wrap; }</style>
+<style scoped>.explanation { white-space: pre-wrap; line-height: 1.5; }.related,.evidence { font-size:12px; margin:6px 0; }.evidence { padding-left:10px; border-left:2px solid #737994; white-space:pre-wrap; }.files { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin:8px 0; }.actions { display:flex; gap:8px; flex-wrap:wrap; }.checkout-evidence { margin:8px 0; }.evidence-meta,.recent-changes { font-size:11px; }.recent-changes { margin:8px 0; }.git-diff { max-height:320px; overflow:auto; padding:10px; background:#11131a; white-space:pre; font-size:11px; }</style>
